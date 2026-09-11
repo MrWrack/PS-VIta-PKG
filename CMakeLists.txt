@@ -14,11 +14,31 @@ set(VITA_APP_NAME "VPK Manager")
 set(VITA_TITLEID "VPKM00001")
 set(VITA_VERSION "01.20")
 
+# VPK promotion needs a generated sce_sys/package/head.bin.
+# The template is downloaded by GitHub Actions from VitaShell's GPL-3.0 repository.
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/resources/head.bin")
+  message(FATAL_ERROR "resources/head.bin saknas. Kor workflowen eller hamta VitaShell resources/head.bin.")
+endif()
+
+add_custom_command(
+  OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/head_bin.o"
+  COMMAND ${CMAKE_LINKER} -r -b binary
+          -o "${CMAKE_CURRENT_BINARY_DIR}/head_bin.o"
+          resources/head.bin
+  DEPENDS "${CMAKE_SOURCE_DIR}/resources/head.bin"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  VERBATIM
+)
+
+
 add_executable(${PROJECT_NAME}
   src/main.c
   src/ziputil.c
   src/sfo.c
   src/net_receiver.c
+  src/sha1tiny.c
+  src/vpk_head.c
+  ${CMAKE_CURRENT_BINARY_DIR}/head_bin.o
 )
 
 target_link_libraries(${PROJECT_NAME}

@@ -14,6 +14,7 @@
 #include "ziputil.h"
 #include "sfo.h"
 #include "net_receiver.h"
+#include "vpk_head.h"
 
 #define DOWNLOAD_DIR "ux0:/downloads"
 #define DATA_DIR "ux0:/data/vpk_manager"
@@ -372,10 +373,25 @@ static int install_selected(void) {
         rm_tree(INSTALL_DIR);
         return r;
     }
-    snprintf(status_line, sizeof(status_line), "Installerar %s...", meta.title[0] ? meta.title : files[selected].name);
-    r = scePromoterUtilityPromotePkg(INSTALL_DIR, 1);
-    if (r >= 0) snprintf(status_line, sizeof(status_line), "Installation klar.");
-    else snprintf(status_line, sizeof(status_line), "Installationen misslyckades: 0x%08X", r);
+    snprintf(status_line, sizeof(status_line), "Forbereder paket...");
+    r = vpk_make_head_bin(INSTALL_DIR);
+    if (r < 0) {
+        snprintf(status_line, sizeof(status_line), "Kunde inte skapa head.bin: %d", r);
+        rm_tree(INSTALL_DIR);
+        return r;
+    }
+
+    snprintf(status_line, sizeof(status_line), "Installerar %s...",
+             meta.title[0] ? meta.title : files[selected].name);
+
+    r = scePromoterUtilityPromotePkgWithRif(INSTALL_DIR, 1);
+
+    if (r >= 0)
+        snprintf(status_line, sizeof(status_line), "Installation klar.");
+    else
+        snprintf(status_line, sizeof(status_line),
+                 "Installationen misslyckades: 0x%08X", r);
+
     rm_tree(INSTALL_DIR);
     return r;
 }
