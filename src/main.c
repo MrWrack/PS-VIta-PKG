@@ -155,28 +155,62 @@ static void ensure_dirs(void) {
 
 static void scan_vpks(void) {
     file_count = 0;
-    SceUID d = sceIoDopen(DOWNLOAD_DIR);
-    if (d < 0) {
-        snprintf(status_line, sizeof(status_line), "Kan inte oppna %s (0x%08X)", DOWNLOAD_DIR, d);
-        return;
-    }
-    SceIoDirent ent; memset(&ent, 0, sizeof(ent));
-    while (file_count < MAX_FILES && sceIoDread(d, &ent) > 0) {
-        if (strcmp(ent.d_name, ".") != 0 &&
-            strcmp(ent.d_name, "..") != 0 &&
-            ends_with_vpk(ent.d_name)) {
+
+    const char *paths[] = {
+        "ux0:/download",
+        "ux0:/download/",
+        "ux0:download",
+        "ux0:download/"
+    };
+
+    int opened_any = 0;
+    int total_entries = 0;
+    int last_read = 0;
+    int last_open_error = 0;
+
+    for (unsigned int p = 0; p < sizeof(paths) / sizeof(paths[0]); ++p) {
+        SceUID d = sceIoDopen(paths[p]);
+        if (d < 0) {
+            last_open_error = d;
+            continue;
+        }
+
+        opened_any = 1;
+
+        while (file_count < MAX_FILES) {
+            SceIoDirent ent;
+            memset(&ent, 0, sizeof(ent));
+
+            int rr = sceIoDread(d, &ent);
+            last_read = rr;
+
+            if (rr <= 0)
+                break;
+
+            total_entries++;
+
+            ent.d_name[sizeof(ent.d_name) - 1] = '\0';
+
+            if (!strcmp(ent.d_name, ".") || !strcmp(ent.d_name, ".."))
+                continue;
+
+            if (!ends_with_vpk(ent.d_name))
+                continue;
 
             snprintf(files[file_count].name,
                      sizeof(files[file_count].name),
                      "%s", ent.d_name);
 
+            /* Always normalize stored paths to Vita's standard ux0:/ form. */
             snprintf(files[file_count].path,
                      sizeof(files[file_count].path),
-                     "%s/%s", DOWNLOAD_DIR, ent.d_name);
+                     "ux0:/download/%s", ent.d_name);
 
             SceIoStat st;
             memset(&st, 0, sizeof(st));
-            if (sceIoGetstat(files[file_count].path, &st) >= 0)
+
+            int sr = sceIoGetstat(files[file_count].path, &st);
+            if (sr >= 0)
                 files[file_count].size = st.st_size;
             else
                 files[file_count].size = ent.d_stat.st_size;
@@ -184,11 +218,27 @@ static void scan_vpks(void) {
             file_count++;
         }
 
-        memset(&ent, 0, sizeof(ent));
+        sceIoDclose(d);
+
+        /* Stop after the first path variant that actually lists entries.
+           This prevents duplicates if several variants map to the same folder. */
+        if (total_entries > 0)
+            break;
     }
-    sceIoDclose(d);
-    if (selected >= file_count) selected = file_count > 0 ? file_count - 1 : 0;
-    if (scroll > selected) scroll = selected;
+
+    if (!opened_any) {
+        snprintf(status_line, sizeof(status_line),
+                 "Kan inte oppna download-mappen: 0x%08X", last_open_error);
+    } else if (file_count == 0) {
+        snprintf(status_line, sizeof(status_line),
+                 "0 VPK. Poster:%d Dread:%d", total_entries, last_read);
+    }
+
+    if (selected >= file_count)
+        selected = file_count > 0 ? file_count - 1 : 0;
+
+    if (scroll > selected)
+        scroll = selected;
 }
 
 static void clear_preview(void) {
@@ -226,8 +276,8 @@ static void refresh_vpk_list(void) {
         selected = 0;
         scroll = 0;
         clear_preview();
-        snprintf(status_line, sizeof(status_line),
-                 "Inga VPK-filer hittades i ux0:/download/");
+        /* Keep scan_vpks() diagnostic text so we can see whether the
+           directory opened and whether sceIoDread returned entries. */
         return;
     }
 
