@@ -6,6 +6,7 @@
 #include <zlib.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/dirent.h>
+#include <psp2/io/stat.h>
 
 #define SIG_EOCD 0x06054b50u
 #define SIG_CEN  0x02014b50u
