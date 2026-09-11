@@ -1,0 +1,48 @@
+name: Build VPK Manager
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - "src/**"
+      - "pkg/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "pkg/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: vitasdk/vitasdk:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VPK
+        run: |
+          cmake --build build --parallel
+
+      - name: Verify VPK output
+        run: |
+          test -f build/VPKManager.vpk
+          ls -lh build/VPKManager.vpk
+
+      - name: Upload VPKManager.vpk
+        uses: actions/upload-artifact@v4
+        with:
+          name: VPKManager-v5-PS-Vita
+          path: build/VPKManager.vpk
+          if-no-files-found: error
+          retention-days: 30
