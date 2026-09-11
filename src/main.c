@@ -242,29 +242,68 @@ static void scan_vpks(void) {
 }
 
 static void clear_preview(void) {
-    if (preview_icon) { vita2d_free_texture(preview_icon); preview_icon = NULL; }
+    if (preview_icon) {
+        vita2d_free_texture(preview_icon);
+        preview_icon = NULL;
+    }
+
     memset(&meta, 0, sizeof(meta));
-    rm_tree(PREVIEW_DIR);
+
+    /* Safer than recursively deleting the whole preview directory
+       every time the selection changes. */
+    char icon_path[512];
+    char sfo_path[512];
+
+    snprintf(icon_path, sizeof(icon_path), "%s/icon0.png", PREVIEW_DIR);
+    snprintf(sfo_path, sizeof(sfo_path), "%s/param.sfo", PREVIEW_DIR);
+
+    sceIoRemove(icon_path);
+    sceIoRemove(sfo_path);
 }
 
 static void load_preview(void) {
     clear_preview();
-    if (file_count <= 0) return;
+
+    if (file_count <= 0)
+        return;
+
+    if (selected < 0 || selected >= file_count)
+        selected = 0;
+
     sceIoMkdir(PREVIEW_DIR, 0777);
-    char icon_path[512], sfo_path[512];
-    snprintf(icon_path, sizeof(icon_path), "%s/icon0.png", PREVIEW_DIR);
+
+    char sfo_path[512];
     snprintf(sfo_path, sizeof(sfo_path), "%s/param.sfo", PREVIEW_DIR);
 
-    int ir = zip_extract_named(files[selected].path, "sce_sys/icon0.png", icon_path);
-    int sr = zip_extract_named(files[selected].path, "sce_sys/param.sfo", sfo_path);
+    /* Metadata is kept enabled. */
+    int sr = zip_extract_named(files[selected].path,
+                               "sce_sys/param.sfo",
+                               sfo_path);
+
     if (sr == 0) {
-        if (sfo_get_string(sfo_path, "TITLE", meta.title, sizeof(meta.title)) < 0)
-            snprintf(meta.title, sizeof(meta.title), "%s", files[selected].name);
-        sfo_get_string(sfo_path, "TITLE_ID", meta.titleid, sizeof(meta.titleid));
-        sfo_get_string(sfo_path, "APP_VER", meta.version, sizeof(meta.version));
+        if (sfo_get_string(sfo_path, "TITLE",
+                           meta.title, sizeof(meta.title)) < 0) {
+            snprintf(meta.title, sizeof(meta.title),
+                     "%s", files[selected].name);
+        }
+
+        sfo_get_string(sfo_path, "TITLE_ID",
+                       meta.titleid, sizeof(meta.titleid));
+
+        sfo_get_string(sfo_path, "APP_VER",
+                       meta.version, sizeof(meta.version));
+
+        meta.valid = 1;
+    } else {
+        snprintf(meta.title, sizeof(meta.title),
+                 "%s", files[selected].name);
         meta.valid = 1;
     }
-    if (ir == 0) preview_icon = vita2d_load_PNG_file(icon_path);
+
+    /* SAFE MODE:
+       Do not decode icon0.png yet. Some VPKs contain unusual or malformed
+       PNG files that can crash vita2d_load_PNG_file(). */
+    preview_icon = NULL;
 }
 
 static void refresh_vpk_list(void) {
