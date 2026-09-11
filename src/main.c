@@ -4,6 +4,7 @@
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/promoterutil.h>
+#include <psp2/sysmodule.h>
 
 #include <vita2d.h>
 #include <stdio.h>
@@ -362,6 +363,71 @@ static int delete_selected(void) {
     return r;
 }
 
+
+static int load_sce_paf(void) {
+    static unsigned int argp[] = {
+        0x180000, 0xFFFFFFFF, 0xFFFFFFFF, 1, 0xFFFFFFFF, 0xFFFFFFFF
+    };
+
+    int result = -1;
+    unsigned int buf[4];
+
+    buf[0] = sizeof(buf);
+    buf[1] = (unsigned int)&result;
+    buf[2] = 0xFFFFFFFF;
+    buf[3] = 0xFFFFFFFF;
+
+    return sceSysmoduleLoadModuleInternalWithArg(
+        SCE_SYSMODULE_INTERNAL_PAF,
+        sizeof(argp),
+        argp,
+        (const SceSysmoduleOpt *)buf
+    );
+}
+
+static int unload_sce_paf(void) {
+    unsigned int buf = 0;
+    return sceSysmoduleUnloadModuleInternalWithArg(
+        SCE_SYSMODULE_INTERNAL_PAF, 0, NULL, (const SceSysmoduleOpt *)&buf
+    );
+}
+
+static int promote_package_safe(const char *path) {
+    int r;
+    int paf_loaded = 0;
+    int promoter_loaded = 0;
+    int promoter_inited = 0;
+
+    r = load_sce_paf();
+    if (r < 0)
+        return r;
+    paf_loaded = 1;
+
+    r = sceSysmoduleLoadModuleInternal(SCE_SYSMODULE_INTERNAL_PROMOTER_UTIL);
+    if (r < 0)
+        goto cleanup;
+    promoter_loaded = 1;
+
+    r = scePromoterUtilityInit();
+    if (r < 0)
+        goto cleanup;
+    promoter_inited = 1;
+
+    r = scePromoterUtilityPromotePkgWithRif(path, 1);
+
+cleanup:
+    if (promoter_inited)
+        scePromoterUtilityExit();
+
+    if (promoter_loaded)
+        sceSysmoduleUnloadModuleInternal(SCE_SYSMODULE_INTERNAL_PROMOTER_UTIL);
+
+    if (paf_loaded)
+        unload_sce_paf();
+
+    return r;
+}
+
 static int install_selected(void) {
     if (file_count <= 0) return -1;
     snprintf(status_line, sizeof(status_line), "Packar upp %s...", files[selected].name);
@@ -384,7 +450,7 @@ static int install_selected(void) {
     snprintf(status_line, sizeof(status_line), "Installerar %s...",
              meta.title[0] ? meta.title : files[selected].name);
 
-    r = scePromoterUtilityPromotePkgWithRif(INSTALL_DIR, 1);
+    r = promote_package_safe(INSTALL_DIR);
 
     if (r >= 0)
         snprintf(status_line, sizeof(status_line), "Installation klar.");
@@ -441,15 +507,9 @@ int main(void) {
     load_app_background();
     vita2d_pgf *font = vita2d_load_default_pgf();
     ensure_dirs();
-    /* Keep PC network disabled for now, but enable local VPK installation. */
+    /* PC network remains disabled. Promoter modules are loaded only after X. */
     int net_res = -1;
-    int promoter_res = scePromoterUtilityInit();
-
-    if (promoter_res >= 0)
-        snprintf(status_line, sizeof(status_line), "VPK-installation redo.");
-    else
-        snprintf(status_line, sizeof(status_line),
-                 "Promoter init fel: 0x%08X", promoter_res);
+    snprintf(status_line, sizeof(status_line), "Redo. X = installera vald VPK.");
 
     refresh_vpk_list();
 
@@ -470,12 +530,7 @@ int main(void) {
         }
         if (changed) load_preview();
         if (!settings_open && (pressed & SCE_CTRL_CROSS)) {
-            if (promoter_res >= 0)
-                install_selected();
-            else
-                snprintf(status_line, sizeof(status_line),
-                         "Install kan inte starta: promoter 0x%08X",
-                         promoter_res);
+            install_selected();
         }
         if (!settings_open && (pressed & SCE_CTRL_RTRIGGER))
             snprintf(status_line, sizeof(status_line), "PC-VPK fortfarande avstangt for stabilitet.");
@@ -547,8 +602,6 @@ int main(void) {
     rm_tree(INSTALL_DIR);
     free_theme_bg();
 
-    if (promoter_res >= 0)
-        scePromoterUtilityExit();
 
     /* PC network remains disabled in this build. */
     vita2d_free_pgf(font);
