@@ -15,7 +15,7 @@
 #include "sfo.h"
 #include "net_receiver.h"
 
-#define DOWNLOAD_DIR "ux0:/download"
+#define DOWNLOAD_DIR "ux0:/downloads"
 #define DATA_DIR "ux0:/data/vpk_manager"
 #define PREVIEW_DIR DATA_DIR "/preview"
 #define INSTALL_DIR DATA_DIR "/install"
@@ -157,10 +157,10 @@ static void scan_vpks(void) {
     file_count = 0;
 
     const char *paths[] = {
-        "ux0:/download",
-        "ux0:/download/",
-        "ux0:download",
-        "ux0:download/"
+        "ux0:/downloads",
+        "ux0:/downloads/",
+        "ux0:downloads",
+        "ux0:downloads/"
     };
 
     int opened_any = 0;
@@ -204,7 +204,7 @@ static void scan_vpks(void) {
             /* Always normalize stored paths to Vita's standard ux0:/ form. */
             snprintf(files[file_count].path,
                      sizeof(files[file_count].path),
-                     "ux0:/download/%s", ent.d_name);
+                     "ux0:/downloads/%s", ent.d_name);
 
             SceIoStat st;
             memset(&st, 0, sizeof(st));
@@ -228,7 +228,7 @@ static void scan_vpks(void) {
 
     if (!opened_any) {
         snprintf(status_line, sizeof(status_line),
-                 "Kan inte oppna download-mappen: 0x%08X", last_open_error);
+                 "Kan inte oppna downloads-mappen: 0x%08X", last_open_error);
     } else if (file_count == 0) {
         snprintf(status_line, sizeof(status_line),
                  "0 VPK. Poster:%d Dread:%d", total_entries, last_read);
@@ -294,7 +294,7 @@ static void refresh_vpk_list(void) {
     load_preview();
 
     snprintf(status_line, sizeof(status_line),
-             "%d VPK-fil%s hittad%s i ux0:/download/",
+             "%d VPK-fil%s hittad%s i ux0:/downloads/",
              file_count,
              file_count == 1 ? "" : "er",
              file_count == 1 ? "" : "e");
@@ -416,7 +416,7 @@ int main(void) {
             vita2d_draw_texture_scale(theme_bg, 0, 0, sx, sy);
         }
         draw_text(font, 28, 42, theme.accent, 1.15f, "VPK Manager v5");
-        draw_text(font, 28, 70, RGBA8(190,190,190,255), 0.72f, "ux0:/download/");
+        draw_text(font, 28, 70, RGBA8(190,190,190,255), 0.72f, "ux0:/downloads/");
         char pcinfo[160]; snprintf(pcinfo, sizeof(pcinfo), "PC: VPK %s:%d (R)  Theme %s:%d (L)", vita_ip, PC_INSTALL_PORT, vita_ip, PC_THEME_PORT);
         draw_text(font, 350, 70, RGBA8(120,220,255,255), 0.62f, pcinfo);
 
