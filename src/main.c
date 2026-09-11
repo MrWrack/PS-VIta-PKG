@@ -71,8 +71,7 @@ static unsigned int hex_rgb(const char *s, unsigned int fallback) {
     if (*s == '#') s++;
     if (sscanf(s, "%06x", &v) != 1) return fallback;
     return RGBA8((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff, 255);
-}
-{ 
+} 
 static void set_builtin_theme(int choice) {
     theme_choice = choice;
     if (choice == 1) {
@@ -272,12 +271,9 @@ int main(void) {
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     vita2d_init();
     set_builtin_theme(0);
-    vita2d_set_clear_color(theme.bg);
     vita2d_pgf *font = vita2d_load_default_pgf();
     ensure_dirs();
-    int net_res = net_receiver_init(vita_ip, sizeof(vita_ip));
     if (net_res < 0) snprintf(status_line, sizeof(status_line), "Natverk init fel: 0x%08X", net_res);
-    int promoter_res = scePromoterUtilityInit();
     if (promoter_res < 0) snprintf(status_line, sizeof(status_line), "Promoter init fel: 0x%08X", promoter_res);
     scan_vpks();
     load_preview();
@@ -368,4 +364,3 @@ int main(void) {
     if (promoter_res >= 0) scePromoterUtilityExit();
     vita2d_free_pgf(font); vita2d_fini(); sceKernelExitProcess(0); return 0;
 }
-int main(void)
