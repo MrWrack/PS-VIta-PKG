@@ -1,13 +1,16 @@
 #include <psp2/ctrl.h>
 #include <psp2/io/dirent.h>
 #include <psp2/io/fcntl.h>
+#include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/promoterutil.h>
+
 #include <vita2d.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+
 #include "ziputil.h"
 #include "sfo.h"
 #include "net_receiver.h"
