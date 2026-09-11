@@ -72,7 +72,7 @@ static unsigned int hex_rgb(const char *s, unsigned int fallback) {
     if (sscanf(s, "%06x", &v) != 1) return fallback;
     return RGBA8((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff, 255);
 }
-
+{ 
 static void set_builtin_theme(int choice) {
     theme_choice = choice;
     if (choice == 1) {
@@ -368,3 +368,4 @@ int main(void) {
     if (promoter_res >= 0) scePromoterUtilityExit();
     vita2d_free_pgf(font); vita2d_fini(); sceKernelExitProcess(0); return 0;
 }
+int main(void)
