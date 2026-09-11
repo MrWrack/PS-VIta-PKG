@@ -1,0 +1,11 @@
+VPK Manager Vita PNG auto-fix
+
+Before promotion, every .png under the extracted sce_sys directory is rewritten
+as an indexed 8-bit palette PNG without alpha.
+
+This specifically fixes packages such as the supplied VPKManager.vpk whose
+sce_sys/icon0.png is truecolor RGB. Vita promotion can fail with 0x8010113D
+for truecolor LiveArea resources.
+
+The conversion runs only in the temporary extracted install directory; the
+original .vpk in ux0:/downloads is not modified.

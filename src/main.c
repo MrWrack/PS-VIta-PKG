@@ -16,6 +16,7 @@
 #include "sfo.h"
 #include "net_receiver.h"
 #include "vpk_head.h"
+#include "vita_png_fix.h"
 
 #define DOWNLOAD_DIR "ux0:/downloads"
 #define DATA_DIR "ux0:/data/vpk_manager"
@@ -439,7 +440,18 @@ static int install_selected(void) {
         rm_tree(INSTALL_DIR);
         return r;
     }
-    snprintf(status_line, sizeof(status_line), "Forbereder paket...");
+    int fixed_pngs = 0;
+    snprintf(status_line, sizeof(status_line), "Fixar Vita PNG-bilder...");
+    r = vita_fix_sce_sys_pngs(INSTALL_DIR, &fixed_pngs);
+    if (r < 0) {
+        snprintf(status_line, sizeof(status_line),
+                 "PNG-fix misslyckades: %d", r);
+        rm_tree(INSTALL_DIR);
+        return r;
+    }
+
+    snprintf(status_line, sizeof(status_line),
+             "Forbereder paket (%d PNG fixade)...", fixed_pngs);
     r = vpk_make_head_bin(INSTALL_DIR);
     if (r < 0) {
         snprintf(status_line, sizeof(status_line), "Kunde inte skapa head.bin: %d", r);

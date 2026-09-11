@@ -38,6 +38,7 @@ add_executable(${PROJECT_NAME}
   src/net_receiver.c
   src/sha1tiny.c
   src/vpk_head.c
+  src/vita_png_fix.c
   ${CMAKE_CURRENT_BINARY_DIR}/head_bin.o
 )
 
