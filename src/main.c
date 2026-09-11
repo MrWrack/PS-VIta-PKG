@@ -425,11 +425,16 @@ int main(void) {
     load_app_background();
     vita2d_pgf *font = vita2d_load_default_pgf();
     ensure_dirs();
-    /* Diagnostic startup mode: network and promoter are disabled temporarily
-       so we can verify that the UI starts without C2-12828-1. */
+    /* Keep PC network disabled for now, but enable local VPK installation. */
     int net_res = -1;
-    int promoter_res = -1;
-    snprintf(status_line, sizeof(status_line), "Testlage: natverk/install avstangt.");
+    int promoter_res = scePromoterUtilityInit();
+
+    if (promoter_res >= 0)
+        snprintf(status_line, sizeof(status_line), "VPK-installation redo.");
+    else
+        snprintf(status_line, sizeof(status_line),
+                 "Promoter init fel: 0x%08X", promoter_res);
+
     refresh_vpk_list();
 
     SceCtrlData pad, oldpad;
@@ -448,9 +453,18 @@ int main(void) {
             if (selected >= scroll + 8) scroll = selected - 7;
         }
         if (changed) load_preview();
-        if (!settings_open && (pressed & SCE_CTRL_CROSS)) snprintf(status_line, sizeof(status_line), "Install avstangt i testlage.");
-        if (!settings_open && (pressed & SCE_CTRL_RTRIGGER)) snprintf(status_line, sizeof(status_line), "PC-VPK avstangt i testlage.");
-        if (!settings_open && (pressed & SCE_CTRL_LTRIGGER)) snprintf(status_line, sizeof(status_line), "PC-Tema avstangt i testlage.");
+        if (!settings_open && (pressed & SCE_CTRL_CROSS)) {
+            if (promoter_res >= 0)
+                install_selected();
+            else
+                snprintf(status_line, sizeof(status_line),
+                         "Install kan inte starta: promoter 0x%08X",
+                         promoter_res);
+        }
+        if (!settings_open && (pressed & SCE_CTRL_RTRIGGER))
+            snprintf(status_line, sizeof(status_line), "PC-VPK fortfarande avstangt for stabilitet.");
+        if (!settings_open && (pressed & SCE_CTRL_LTRIGGER))
+            snprintf(status_line, sizeof(status_line), "PC-Tema fortfarande avstangt for stabilitet.");
         if (!settings_open && (pressed & SCE_CTRL_TRIANGLE)) delete_selected();
         if (!settings_open && (pressed & SCE_CTRL_SQUARE)) refresh_vpk_list();
         if (pressed & SCE_CTRL_START) settings_open = !settings_open;
@@ -513,7 +527,16 @@ int main(void) {
         vita2d_end_drawing(); vita2d_swap_buffers(); oldpad = pad;
     }
 
-    clear_preview(); rm_tree(INSTALL_DIR); free_theme_bg();
-    /* net_receiver_term() and scePromoterUtilityExit() are disabled in test mode. */
-    vita2d_free_pgf(font); vita2d_fini(); sceKernelExitProcess(0); return 0;
+    clear_preview();
+    rm_tree(INSTALL_DIR);
+    free_theme_bg();
+
+    if (promoter_res >= 0)
+        scePromoterUtilityExit();
+
+    /* PC network remains disabled in this build. */
+    vita2d_free_pgf(font);
+    vita2d_fini();
+    sceKernelExitProcess(0);
+    return 0;
 }
