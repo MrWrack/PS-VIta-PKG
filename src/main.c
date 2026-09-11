@@ -22,6 +22,7 @@
 #define THEME_DIR DATA_DIR "/theme"
 #define THEME_CFG THEME_DIR "/theme.ini"
 #define THEME_BG THEME_DIR "/background.png"
+#define APP_BG "app0:app_background.png"
 #define MAX_FILES 256
 #define NAME_LEN 256
 #define PC_INSTALL_PORT 1338
@@ -93,6 +94,11 @@ static void free_theme_bg(void) {
     if (theme_bg) { vita2d_free_texture(theme_bg); theme_bg = NULL; }
 }
 
+static void load_app_background(void) {
+    free_theme_bg();
+    theme_bg = vita2d_load_PNG_file(APP_BG);
+}
+
 static int load_custom_theme(void) {
     set_builtin_theme(0);
     snprintf(theme.name,sizeof(theme.name),"Custom");
@@ -121,7 +127,13 @@ static int load_custom_theme(void) {
 
 static void apply_theme_choice(int choice) {
     free_theme_bg();
-    if (choice == 3) load_custom_theme(); else set_builtin_theme(choice);
+    if (choice == 3) {
+        load_custom_theme();
+        if (!theme_bg) load_app_background();
+    } else {
+        set_builtin_theme(choice);
+        load_app_background();
+    }
     vita2d_set_clear_color(theme.bg);
 }
 
@@ -410,6 +422,7 @@ int main(void) {
     vita2d_init();
     set_builtin_theme(0);
     vita2d_set_clear_color(theme.bg);
+    load_app_background();
     vita2d_pgf *font = vita2d_load_default_pgf();
     ensure_dirs();
     /* Diagnostic startup mode: network and promoter are disabled temporarily

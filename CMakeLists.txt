@@ -48,4 +48,5 @@ vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
 vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
     VERSION ${VITA_VERSION}
     NAME ${VITA_APP_NAME}
+    FILE pkg/app_background.png app_background.png
 )
