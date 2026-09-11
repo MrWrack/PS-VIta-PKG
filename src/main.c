@@ -271,10 +271,20 @@ int main(void) {
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     vita2d_init();
     set_builtin_theme(0);
+
     vita2d_pgf *font = vita2d_load_default_pgf();
     ensure_dirs();
-    if (net_res < 0) snprintf(status_line, sizeof(status_line), "Natverk init fel: 0x%08X", net_res);
-    if (promoter_res < 0) snprintf(status_line, sizeof(status_line), "Promoter init fel: 0x%08X", promoter_res);
+
+    // int net_res = net_receiver_init(vita_ip, sizeof(vita_ip));
+    // if (net_res < 0)
+    //     snprintf(status_line, sizeof(status_line),
+    //              "Natverk init fel: 0x%08X", net_res);
+
+    // int promoter_res = scePromoterUtilityInit();
+    // if (promoter_res < 0)
+    //     snprintf(status_line, sizeof(status_line),
+    //              "Promoter init fel: 0x%08X", promoter_res);
+
     scan_vpks();
     load_preview();
 
