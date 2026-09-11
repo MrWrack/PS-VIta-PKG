@@ -285,6 +285,8 @@ static void clear_preview(void) {
 
     sceIoRemove(icon_path);
     sceIoRemove(sfo_path);
+    snprintf(icon_path, sizeof(icon_path), "%s/sce_sys/icon0.png", PREVIEW_DIR);
+    sceIoRemove(icon_path);
 }
 
 static void load_preview(void) {
@@ -326,10 +328,30 @@ static void load_preview(void) {
         meta.valid = 1;
     }
 
-    /* SAFE MODE:
-       Do not decode icon0.png yet. Some VPKs contain unusual or malformed
-       PNG files that can crash vita2d_load_PNG_file(). */
-    preview_icon = NULL;
+    /* Safe VPK cover loading. Extract icon0.png into an isolated preview
+       sce_sys directory, normalize it to Vita-safe indexed PNG8 first, and
+       only then hand it to vita2d. This keeps malformed source PNGs away
+       from the renderer. */
+    {
+        char preview_sce[512];
+        char icon_path[512];
+        int fixed = 0;
+
+        snprintf(preview_sce, sizeof(preview_sce), "%s/sce_sys", PREVIEW_DIR);
+        snprintf(icon_path, sizeof(icon_path), "%s/icon0.png", preview_sce);
+        sceIoMkdir(preview_sce, 0777);
+        sceIoRemove(icon_path);
+
+        int ir = zip_extract_named(files[selected].path,
+                                   "sce_sys/icon0.png",
+                                   icon_path);
+        if (ir == 0) {
+            int fr = vita_fix_sce_sys_pngs(PREVIEW_DIR, &fixed);
+            if (fr == 0) {
+                preview_icon = vita2d_load_PNG_file(icon_path);
+            }
+        }
+    }
 }
 
 static void refresh_vpk_list(void) {
