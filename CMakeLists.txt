@@ -50,7 +50,4 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
     NAME ${VITA_APP_NAME}
     FILE pkg/app_background.png app_background.png
     FILE pkg/sce_sys/icon0.png sce_sys/icon0.png
-    FILE pkg/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
-    FILE pkg/sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
-    FILE pkg/sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
 )
