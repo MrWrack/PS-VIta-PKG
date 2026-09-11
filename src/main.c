@@ -162,12 +162,28 @@ static void scan_vpks(void) {
     }
     SceIoDirent ent; memset(&ent, 0, sizeof(ent));
     while (file_count < MAX_FILES && sceIoDread(d, &ent) > 0) {
-        if (!SCE_S_ISDIR(ent.d_stat.st_mode) && ends_with_vpk(ent.d_name)) {
-            snprintf(files[file_count].name, sizeof(files[file_count].name), "%s", ent.d_name);
-            snprintf(files[file_count].path, sizeof(files[file_count].path), "%s/%s", DOWNLOAD_DIR, ent.d_name);
-            files[file_count].size = ent.d_stat.st_size;
+        if (strcmp(ent.d_name, ".") != 0 &&
+            strcmp(ent.d_name, "..") != 0 &&
+            ends_with_vpk(ent.d_name)) {
+
+            snprintf(files[file_count].name,
+                     sizeof(files[file_count].name),
+                     "%s", ent.d_name);
+
+            snprintf(files[file_count].path,
+                     sizeof(files[file_count].path),
+                     "%s/%s", DOWNLOAD_DIR, ent.d_name);
+
+            SceIoStat st;
+            memset(&st, 0, sizeof(st));
+            if (sceIoGetstat(files[file_count].path, &st) >= 0)
+                files[file_count].size = st.st_size;
+            else
+                files[file_count].size = ent.d_stat.st_size;
+
             file_count++;
         }
+
         memset(&ent, 0, sizeof(ent));
     }
     sceIoDclose(d);
@@ -199,6 +215,39 @@ static void load_preview(void) {
         meta.valid = 1;
     }
     if (ir == 0) preview_icon = vita2d_load_PNG_file(icon_path);
+}
+
+static void refresh_vpk_list(void) {
+    int old_selected = selected;
+
+    scan_vpks();
+
+    if (file_count <= 0) {
+        selected = 0;
+        scroll = 0;
+        clear_preview();
+        snprintf(status_line, sizeof(status_line),
+                 "Inga VPK-filer hittades i ux0:/download/");
+        return;
+    }
+
+    if (old_selected >= 0 && old_selected < file_count)
+        selected = old_selected;
+    else
+        selected = file_count - 1;
+
+    if (selected < scroll)
+        scroll = selected;
+    if (selected >= scroll + 8)
+        scroll = selected - 7;
+
+    load_preview();
+
+    snprintf(status_line, sizeof(status_line),
+             "%d VPK-fil%s hittad%s i ux0:/download/",
+             file_count,
+             file_count == 1 ? "" : "er",
+             file_count == 1 ? "" : "e");
 }
 
 static int delete_selected(void) {
@@ -279,8 +328,7 @@ int main(void) {
     int net_res = -1;
     int promoter_res = -1;
     snprintf(status_line, sizeof(status_line), "Testlage: natverk/install avstangt.");
-    scan_vpks();
-    load_preview();
+    refresh_vpk_list();
 
     SceCtrlData pad, oldpad;
     memset(&pad, 0, sizeof(pad)); memset(&oldpad, 0, sizeof(oldpad));
@@ -302,7 +350,7 @@ int main(void) {
         if (!settings_open && (pressed & SCE_CTRL_RTRIGGER)) snprintf(status_line, sizeof(status_line), "PC-VPK avstangt i testlage.");
         if (!settings_open && (pressed & SCE_CTRL_LTRIGGER)) snprintf(status_line, sizeof(status_line), "PC-Tema avstangt i testlage.");
         if (!settings_open && (pressed & SCE_CTRL_TRIANGLE)) delete_selected();
-        if (!settings_open && (pressed & SCE_CTRL_SQUARE)) { scan_vpks(); load_preview(); snprintf(status_line,sizeof(status_line),"Listan uppdaterad."); }
+        if (!settings_open && (pressed & SCE_CTRL_SQUARE)) refresh_vpk_list();
         if (pressed & SCE_CTRL_START) settings_open = !settings_open;
         if (settings_open) {
             if (pressed & SCE_CTRL_UP) { theme_choice--; if (theme_choice < 0) theme_choice = 3; }
