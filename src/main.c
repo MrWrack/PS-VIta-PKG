@@ -3,6 +3,7 @@
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
 #include <psp2/promoterutil.h>
 #include <psp2/sysmodule.h>
 
@@ -30,7 +31,6 @@
 #define NAME_LEN 256
 #define PC_INSTALL_PORT 1338
 #define PC_THEME_PORT 1339
-#define SELF_TITLE_ID "VPKM00001"
 #define THEME_ZIP DATA_DIR "/theme_upload.zip"
 
 typedef struct {
@@ -54,6 +54,16 @@ static VpkMeta meta;
 static vita2d_texture *preview_icon = NULL;
 static char status_line[256] = "Klar.";
 static char vita_ip[32] = "-";
+
+/* Installation worker state. Heavy VPK work runs outside the UI thread so
+   the menu keeps drawing smoothly while installation is in progress. */
+static volatile int install_busy = 0;
+static volatile int install_progress = 0;
+static volatile int install_result = 0;
+static SceUID install_thread_uid = -1;
+static char install_path[512] = {0};
+static char install_name[NAME_LEN] = {0};
+static char install_title[128] = {0};
 
 typedef struct {
     unsigned int bg;
@@ -430,68 +440,123 @@ cleanup:
     return r;
 }
 
-static int install_selected(void) {
-    if (file_count <= 0) return -1;
-    snprintf(status_line, sizeof(status_line), "Packar upp %s...", files[selected].name);
+static void install_extract_progress(int percent, const char *entry, void *user) {
+    (void)entry;
+    (void)user;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    /* Extraction occupies the first 60 percent of the full install bar. */
+    install_progress = 5 + (percent * 55) / 100;
+    snprintf(status_line, sizeof(status_line),
+             "Packar upp... %d%%", install_progress);
+}
+
+static int install_worker(SceSize args, void *argp) {
+    (void)args;
+    (void)argp;
+
+    int r;
+    int fixed_pngs = 0;
+
+    install_progress = 2;
+    snprintf(status_line, sizeof(status_line), "Forbereder %s... 2%%", install_name);
+
     rm_tree(INSTALL_DIR);
     sceIoMkdir(INSTALL_DIR, 0777);
-    int r = zip_extract_all(files[selected].path, INSTALL_DIR);
+
+    install_progress = 5;
+    r = zip_extract_all_progress(install_path, INSTALL_DIR,
+                                 install_extract_progress, NULL);
     if (r < 0) {
         snprintf(status_line, sizeof(status_line), "Fel vid uppackning: %d", r);
         rm_tree(INSTALL_DIR);
+        install_result = r;
+        install_busy = 0;
         return r;
     }
-    /* Prevent trying to overwrite the currently running VPK Manager. */
-    {
-        char install_sfo[512];
-        char install_titleid[32] = {0};
 
-        snprintf(install_sfo, sizeof(install_sfo),
-                 "%s/sce_sys/param.sfo", INSTALL_DIR);
-
-        if (sfo_get_string(install_sfo, "TITLE_ID",
-                           install_titleid, sizeof(install_titleid)) >= 0) {
-            if (strcmp(install_titleid, SELF_TITLE_ID) == 0) {
-                snprintf(status_line, sizeof(status_line),
-                         "Kan inte installera VPK Manager over sig sjalv. Valj en annan VPK.");
-                rm_tree(INSTALL_DIR);
-                return -2001;
-            }
-        }
-    }
-
-    int fixed_pngs = 0;
-    snprintf(status_line, sizeof(status_line), "Fixar Vita PNG-bilder...");
+    install_progress = 65;
+    snprintf(status_line, sizeof(status_line), "Kontrollerar Vita PNG... 65%%");
     r = vita_fix_sce_sys_pngs(INSTALL_DIR, &fixed_pngs);
     if (r < 0) {
         snprintf(status_line, sizeof(status_line),
                  "PNG-fix misslyckades: %d", r);
         rm_tree(INSTALL_DIR);
+        install_result = r;
+        install_busy = 0;
         return r;
     }
 
+    install_progress = 78;
     snprintf(status_line, sizeof(status_line),
-             "Forbereder paket (%d PNG fixade)...", fixed_pngs);
+             "Forbereder paket (%d PNG fixade)... 78%%", fixed_pngs);
     r = vpk_make_head_bin(INSTALL_DIR);
     if (r < 0) {
-        snprintf(status_line, sizeof(status_line), "Kunde inte skapa head.bin: %d", r);
+        snprintf(status_line, sizeof(status_line),
+                 "Kunde inte skapa head.bin: %d", r);
         rm_tree(INSTALL_DIR);
+        install_result = r;
+        install_busy = 0;
         return r;
     }
 
-    snprintf(status_line, sizeof(status_line), "Installerar %s...",
-             meta.title[0] ? meta.title : files[selected].name);
+    install_progress = 90;
+    snprintf(status_line, sizeof(status_line), "Installerar %s... 90%%",
+             install_title[0] ? install_title : install_name);
 
+    /* Keep the proven promoter flow unchanged; only move it off the UI thread. */
     r = promote_package_safe(INSTALL_DIR);
 
-    if (r >= 0)
-        snprintf(status_line, sizeof(status_line), "Installation klar.");
-    else
+    if (r >= 0) {
+        install_progress = 100;
+        snprintf(status_line, sizeof(status_line), "Installation klar. 100%%");
+    } else {
         snprintf(status_line, sizeof(status_line),
                  "Installationen misslyckades: 0x%08X", r);
+    }
 
     rm_tree(INSTALL_DIR);
+    install_result = r;
+    install_busy = 0;
     return r;
+}
+
+static int start_install_selected(void) {
+    if (install_busy) return -2;
+    if (file_count <= 0) return -1;
+
+    snprintf(install_path, sizeof(install_path), "%s", files[selected].path);
+    snprintf(install_name, sizeof(install_name), "%s", files[selected].name);
+    snprintf(install_title, sizeof(install_title), "%s",
+             meta.title[0] ? meta.title : files[selected].name);
+
+    install_progress = 0;
+    install_result = 0;
+    install_busy = 1;
+    snprintf(status_line, sizeof(status_line), "Startar installation... 0%%");
+
+    install_thread_uid = sceKernelCreateThread(
+        "VPKM_INSTALL", install_worker, 0x10000100, 0x20000, 0, 0, NULL);
+    if (install_thread_uid < 0) {
+        int r = install_thread_uid;
+        install_busy = 0;
+        snprintf(status_line, sizeof(status_line),
+                 "Kunde inte starta installationstrad: 0x%08X", r);
+        return r;
+    }
+
+    int r = sceKernelStartThread(install_thread_uid, 0, NULL);
+    if (r < 0) {
+        sceKernelDeleteThread(install_thread_uid);
+        install_thread_uid = -1;
+        install_busy = 0;
+        snprintf(status_line, sizeof(status_line),
+                 "Kunde inte starta installation: 0x%08X", r);
+        return r;
+    }
+
+    return 0;
 }
 
 
@@ -508,7 +573,7 @@ static int pc_receive_and_install(void) {
     if (r < 0) { snprintf(status_line, sizeof(status_line), "PC-overforing fel: 0x%08X", r); return r; }
     scan_vpks();
     if (select_path(saved) < 0) load_preview();
-    r = install_selected();
+    r = start_install_selected();
     return r;
 }
 
@@ -552,31 +617,38 @@ int main(void) {
         sceCtrlPeekBufferPositive(0, &pad, 1);
         unsigned int pressed = pad.buttons & ~oldpad.buttons;
         int changed = 0;
-        if (!settings_open && (pressed & SCE_CTRL_UP)) {
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_UP)) {
             if (selected > 0) { selected--; changed = 1; }
             if (selected < scroll) scroll = selected;
         }
-        if (!settings_open && (pressed & SCE_CTRL_DOWN)) {
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_DOWN)) {
             if (selected + 1 < file_count) { selected++; changed = 1; }
             if (selected >= scroll + 8) scroll = selected - 7;
         }
         if (changed) load_preview();
-        if (!settings_open && (pressed & SCE_CTRL_CROSS)) {
-            install_selected();
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_CROSS)) {
+            start_install_selected();
         }
-        if (!settings_open && (pressed & SCE_CTRL_RTRIGGER))
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_RTRIGGER))
             snprintf(status_line, sizeof(status_line), "PC-VPK fortfarande avstangt for stabilitet.");
-        if (!settings_open && (pressed & SCE_CTRL_LTRIGGER))
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_LTRIGGER))
             snprintf(status_line, sizeof(status_line), "PC-Tema fortfarande avstangt for stabilitet.");
-        if (!settings_open && (pressed & SCE_CTRL_TRIANGLE)) delete_selected();
-        if (!settings_open && (pressed & SCE_CTRL_SQUARE)) refresh_vpk_list();
-        if (pressed & SCE_CTRL_START) settings_open = !settings_open;
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_TRIANGLE)) delete_selected();
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_SQUARE)) refresh_vpk_list();
+        if (!install_busy && (pressed & SCE_CTRL_START)) settings_open = !settings_open;
         if (settings_open) {
             if (pressed & SCE_CTRL_UP) { theme_choice--; if (theme_choice < 0) theme_choice = 3; }
             if (pressed & SCE_CTRL_DOWN) { theme_choice++; if (theme_choice > 3) theme_choice = 0; }
             if (pressed & SCE_CTRL_CROSS) { apply_theme_choice(theme_choice); settings_open = 0; }
             if (pressed & SCE_CTRL_CIRCLE) settings_open = 0;
-        } else if (pressed & SCE_CTRL_CIRCLE) break;
+        } else if (!install_busy && (pressed & SCE_CTRL_CIRCLE)) break;
+
+        /* Reap the worker after it has finished. */
+        if (!install_busy && install_thread_uid >= 0) {
+            sceKernelWaitThreadEnd(install_thread_uid, NULL, NULL);
+            sceKernelDeleteThread(install_thread_uid);
+            install_thread_uid = -1;
+        }
 
         vita2d_start_drawing(); vita2d_clear_screen();
         if (theme_bg) {
@@ -625,9 +697,37 @@ int main(void) {
             }
             draw_text(font, 245, 420, RGBA8(190,190,190,255), 0.62f, "X Valj   O Tillbaka   Custom: ux0:/data/vpk_manager/theme/");
         }
+        if (install_busy) {
+            int p = install_progress;
+            if (p < 0) p = 0;
+            if (p > 100) p = 100;
+
+            /* Installation modal + animated progress bar. */
+            vita2d_draw_rectangle(150, 165, 660, 190, RGBA8(5,5,8,238));
+            draw_text(font, 185, 210, theme.accent, 1.0f, "Installerar VPK");
+
+            char pct[32];
+            snprintf(pct, sizeof(pct), "%d%%", p);
+            draw_text(font, 710, 210, theme.text, 0.90f, pct);
+
+            vita2d_draw_rectangle(185, 245, 590, 32, RGBA8(45,45,50,255));
+            if (p > 0)
+                vita2d_draw_rectangle(189, 249, (582.0f * p) / 100.0f, 24, theme.accent);
+
+            draw_text(font, 185, 315, RGBA8(220,220,220,255), 0.67f, status_line);
+            draw_text(font, 185, 340, RGBA8(150,150,155,255), 0.56f,
+                      "Vanta tills installationen ar klar. Menyn fortsatter att uppdateras.");
+        }
+
         draw_text(font, 28, 535, RGBA8(255,195,90,255), 0.64f, status_line);
 
         vita2d_end_drawing(); vita2d_swap_buffers(); oldpad = pad;
+    }
+
+    if (install_thread_uid >= 0) {
+        sceKernelWaitThreadEnd(install_thread_uid, NULL, NULL);
+        sceKernelDeleteThread(install_thread_uid);
+        install_thread_uid = -1;
     }
 
     clear_preview();

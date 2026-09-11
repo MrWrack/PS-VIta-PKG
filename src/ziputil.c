@@ -150,3 +150,81 @@ int zip_extract_all(const char *zip_path, const char *dest_dir) {
     fclose(f);
     return c.err ? c.err : r;
 }
+
+/* Same safe extractor as zip_extract_all(), with lightweight progress updates.
+   Progress is based on total uncompressed bytes from the central directory. */
+typedef struct {
+    unsigned long long total;
+    unsigned long long done;
+} SumCtx;
+
+static int sum_cb(const ZipEntry *e, void *u) {
+    SumCtx *s = (SumCtx *)u;
+    size_t n = strlen(e->name);
+    if (n && e->name[n - 1] != '/')
+        s->total += (unsigned long long)e->uncomp_size;
+    return 0;
+}
+
+typedef struct {
+    FILE *f;
+    const char *dest;
+    int err;
+    unsigned long long total;
+    unsigned long long done;
+    zip_progress_cb progress;
+    void *progress_user;
+} ProgressAllCtx;
+
+static int progress_all_cb(const ZipEntry *e, void *u) {
+    ProgressAllCtx *c = (ProgressAllCtx *)u;
+    if (!safe_rel(e->name)) { c->err = -40; return c->err; }
+
+    char out[1024];
+    snprintf(out, sizeof(out), "%s/%s", c->dest, e->name);
+    size_t n = strlen(e->name);
+
+    if (n && e->name[n - 1] == '/') {
+        mkdirs(out);
+        sceIoMkdir(out, 0777);
+        return 0;
+    }
+
+    c->err = extract_entry(c->f, e, out);
+    if (c->err) return c->err;
+
+    c->done += (unsigned long long)e->uncomp_size;
+    if (c->progress) {
+        int pct = c->total ? (int)((c->done * 100ULL) / c->total) : 100;
+        if (pct > 100) pct = 100;
+        c->progress(pct, e->name, c->progress_user);
+    }
+    return 0;
+}
+
+int zip_extract_all_progress(const char *zip_path, const char *dest_dir,
+                             zip_progress_cb progress, void *user) {
+    SumCtx sum;
+    memset(&sum, 0, sizeof(sum));
+    int r = zip_foreach(zip_path, sum_cb, &sum);
+    if (r < 0) return r;
+
+    sceIoMkdir(dest_dir, 0777);
+    FILE *f = fopen(zip_path, "rb");
+    if (!f) return -1;
+
+    ProgressAllCtx c;
+    memset(&c, 0, sizeof(c));
+    c.f = f;
+    c.dest = dest_dir;
+    c.total = sum.total;
+    c.progress = progress;
+    c.progress_user = user;
+
+    if (progress) progress(0, NULL, user);
+    r = zip_foreach(zip_path, progress_all_cb, &c);
+    fclose(f);
+
+    if (!c.err && progress) progress(100, NULL, user);
+    return c.err ? c.err : r;
+}

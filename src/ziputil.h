@@ -12,7 +12,9 @@ typedef struct {
 } ZipEntry;
 
 typedef int (*zip_iter_cb)(const ZipEntry *entry, void *user);
+typedef void (*zip_progress_cb)(int percent, const char *entry_name, void *user);
 
 int zip_foreach(const char *zip_path, zip_iter_cb cb, void *user);
 int zip_extract_named(const char *zip_path, const char *entry_name, const char *out_path);
 int zip_extract_all(const char *zip_path, const char *dest_dir);
+int zip_extract_all_progress(const char *zip_path, const char *dest_dir, zip_progress_cb progress, void *user);

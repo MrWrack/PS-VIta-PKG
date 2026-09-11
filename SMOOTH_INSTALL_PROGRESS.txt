@@ -1,0 +1,8 @@
+VPK Manager - Smooth Install Progress
+
+- X-installationen kor nu i en separat PS Vita-trad.
+- UI/menyn fortsatter ritas medan VPK:n packas upp och installeras.
+- Ny installationsruta med progressbar och 0-100%.
+- Uppackningsprocent raknas fran VPK-filernas okomprimerade storlek.
+- Promoter/head.bin/installationsflodet ar annars lamnat oforandrat eftersom det nu fungerar.
+- VPK Managers egen icon0.png ar den testade Vita-kompatibla indexed PNG8-ikonen.
