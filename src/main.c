@@ -30,6 +30,7 @@
 #define NAME_LEN 256
 #define PC_INSTALL_PORT 1338
 #define PC_THEME_PORT 1339
+#define SELF_TITLE_ID "VPKM00001"
 #define THEME_ZIP DATA_DIR "/theme_upload.zip"
 
 typedef struct {
@@ -440,6 +441,25 @@ static int install_selected(void) {
         rm_tree(INSTALL_DIR);
         return r;
     }
+    /* Prevent trying to overwrite the currently running VPK Manager. */
+    {
+        char install_sfo[512];
+        char install_titleid[32] = {0};
+
+        snprintf(install_sfo, sizeof(install_sfo),
+                 "%s/sce_sys/param.sfo", INSTALL_DIR);
+
+        if (sfo_get_string(install_sfo, "TITLE_ID",
+                           install_titleid, sizeof(install_titleid)) >= 0) {
+            if (strcmp(install_titleid, SELF_TITLE_ID) == 0) {
+                snprintf(status_line, sizeof(status_line),
+                         "Kan inte installera VPK Manager over sig sjalv. Valj en annan VPK.");
+                rm_tree(INSTALL_DIR);
+                return -2001;
+            }
+        }
+    }
+
     int fixed_pngs = 0;
     snprintf(status_line, sizeof(status_line), "Fixar Vita PNG-bilder...");
     r = vita_fix_sce_sys_pngs(INSTALL_DIR, &fixed_pngs);

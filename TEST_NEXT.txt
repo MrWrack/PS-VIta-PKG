@@ -1,0 +1,12 @@
+TESTA DEN HÄR VERSIONEN
+
+1. Starta VPK Manager.
+2. Markera INTE VPKManager.vpk.
+   Den har TITLE_ID VPKM00001, samma som appen som körs.
+3. Markera till exempel VitaSearch.vpk eller en annan homebrew-VPK.
+4. Tryck X.
+
+Om du markerar VPKManager.vpk visas nu ett meddelande i appen i stället
+för att försöka ersätta den körande appen.
+
+För riktig självuppdatering behövs en separat updater-app/process.
