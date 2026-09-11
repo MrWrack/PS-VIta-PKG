@@ -43,9 +43,27 @@ jobs:
         run: |
           cmake --build build --parallel
 
+      - name: Repack VPK in tested Vita-safe format
+        run: |
+          python3 tools/repack_vpk_uncompressed.py build/VPKManager.vpk
+
       - name: Verify VPK output
         run: |
           test -f build/VPKManager.vpk
+          python3 - <<'PYVERIFY'
+          import zipfile
+          from pathlib import Path
+          p = Path('build/VPKManager.vpk')
+          with zipfile.ZipFile(p, 'r') as z:
+              bad = [i.filename for i in z.infolist() if i.compress_type != zipfile.ZIP_STORED]
+              if bad:
+                  raise SystemExit('Compressed entries remain: ' + ', '.join(bad))
+              required = {'eboot.bin', 'sce_sys/param.sfo', 'sce_sys/icon0.png'}
+              missing = required - set(z.namelist())
+              if missing:
+                  raise SystemExit('Missing VPK files: ' + ', '.join(sorted(missing)))
+          print('VPK structure verified and all entries are uncompressed.')
+          PYVERIFY
           ls -lh build/VPKManager.vpk
 
       - name: Upload VPKManager.vpk
