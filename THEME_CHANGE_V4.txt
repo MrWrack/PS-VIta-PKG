@@ -1,0 +1,6 @@
+V4 Theme Change
+- Vita listens automatically on VPK port 1338 and Theme port 1339.
+- PC search fills IP + both ports.
+- Profiles save IP + VPK port + Theme port.
+- PC can preview PNG/JPG, package it as 960x544 theme, send it and Vita applies it.
+- Existing MrWrack app background remains built in and is never overwritten.

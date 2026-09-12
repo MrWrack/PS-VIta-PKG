@@ -1,0 +1,6 @@
+PC AUTO DISCOVERY v3
+- Ny knapp: Sök PS Vita.
+- Söker automatiskt datorns lokala /24-nät efter VPK Manager på port 1338.
+- Hittad IP fylls i automatiskt; användaren trycker sedan Connect.
+- Manuell IP, profiler, spara/ändra/ta bort/standard finns kvar.
+- Vita-servern och den stabila VPK-install/cover/metadata/scroll-koden är oförändrade.

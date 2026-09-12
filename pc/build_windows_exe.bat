@@ -1,7 +1,9 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-py -3 -m pip install --upgrade pyinstaller
-py -3 -m PyInstaller --noconfirm --onefile --windowed --name "VPK Manager PC" vpk_manager_pc.py
+py -m pip install --upgrade pyinstaller pillow
+py -m PyInstaller --noconfirm --clean --onefile --windowed --name "VPK Manager PC" vpk_manager_pc.py
+if errorlevel 1 pause & exit /b 1
 echo.
-echo EXE: dist\VPK Manager PC.exe
+echo Klar: dist\VPK Manager PC.exe
 pause

@@ -92,6 +92,38 @@ static volatile int pc_recv_result = 0;
 static SceUID pc_recv_thread_uid = -1;
 static char pc_recv_saved[512] = {0};
 
+/* Theme receiver is separate from VPK port so both can stay available. */
+static volatile int theme_recv_busy = 0;
+static volatile int theme_recv_done = 0;
+static volatile int theme_recv_result = 0;
+static SceUID theme_recv_thread_uid = -1;
+
+static int theme_receive_worker(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    theme_recv_result = net_receive_theme_zip(THEME_ZIP, PC_THEME_PORT, NULL, 0);
+    if (theme_recv_result >= 0) {
+        rm_tree(THEME_DIR);
+        sceIoMkdir(THEME_DIR, 0777);
+        theme_recv_result = zip_extract_all(THEME_ZIP, THEME_DIR);
+        sceIoRemove(THEME_ZIP);
+    }
+    theme_recv_busy = 0;
+    theme_recv_done = 1;
+    return 0;
+}
+
+static int start_theme_receiver(void) {
+    if (theme_recv_busy || theme_recv_thread_uid >= 0) return 0;
+    theme_recv_done = 0; theme_recv_result = 0;
+    theme_recv_thread_uid = sceKernelCreateThread(
+        "VPKM_THEME_RECV", theme_receive_worker, 0x10000100, 0x20000, 0, 0, NULL);
+    if (theme_recv_thread_uid < 0) return theme_recv_thread_uid;
+    int r = sceKernelStartThread(theme_recv_thread_uid, 0, NULL);
+    if (r < 0) { sceKernelDeleteThread(theme_recv_thread_uid); theme_recv_thread_uid = -1; return r; }
+    theme_recv_busy = 1;
+    return 0;
+}
+
 static int pc_receive_worker(SceSize args, void *argp) {
     (void)args; (void)argp;
     pc_recv_result = net_receive_one_vpk(DOWNLOAD_DIR, PC_INSTALL_PORT,
@@ -900,6 +932,7 @@ int main(void) {
         snprintf(status_line, sizeof(status_line), "PC Quick Install: %s:%d - vantar pa PC", vita_ip, PC_INSTALL_PORT);
         int pr = start_pc_receiver();
         if (pr < 0) snprintf(status_line, sizeof(status_line), "PC-mottagare fel: 0x%08X", pr);
+        start_theme_receiver();
     }
 
     refresh_vpk_list();
@@ -998,8 +1031,28 @@ int main(void) {
         if (net_res >= 0 && !install_busy && !pc_recv_busy && !pc_recv_done && pc_recv_thread_uid < 0) {
             start_pc_receiver();
         }
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_LTRIGGER))
-            snprintf(status_line, sizeof(status_line), "PC-Tema fortfarande avstangt for stabilitet.");
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_LTRIGGER)) {
+            if (!theme_recv_busy && theme_recv_thread_uid < 0) start_theme_receiver();
+            snprintf(status_line, sizeof(status_line), "PC Theme: %s:%d - vantar pa PC", vita_ip, PC_THEME_PORT);
+        }
+        if (theme_recv_done) {
+            theme_recv_done = 0;
+            if (theme_recv_thread_uid >= 0) {
+                sceKernelWaitThreadEnd(theme_recv_thread_uid, NULL, NULL);
+                sceKernelDeleteThread(theme_recv_thread_uid);
+                theme_recv_thread_uid = -1;
+            }
+            if (theme_recv_result < 0) {
+                snprintf(status_line, sizeof(status_line), "Tema-overforing fel: 0x%08X", theme_recv_result);
+            } else {
+                load_custom_theme();
+                vita2d_set_clear_color(theme.bg);
+                snprintf(status_line, sizeof(status_line), "Custom theme installerat fran PC.");
+            }
+        }
+        if (net_res >= 0 && !theme_recv_busy && !theme_recv_done && theme_recv_thread_uid < 0)
+            start_theme_receiver();
+
         if (!settings_open && !install_busy && (pressed & SCE_CTRL_TRIANGLE)) { preview_load_pending = 0; delete_selected(); }
         if (!settings_open && !install_busy && (pressed & SCE_CTRL_SQUARE)) { preview_load_pending = 0; refresh_vpk_list(); }
         if (!install_busy && (pressed & SCE_CTRL_START)) settings_open = !settings_open;
@@ -1125,7 +1178,7 @@ int main(void) {
 
 
     if (pc_recv_thread_uid >= 0) {
-        sceKernelDeleteThread(pc_recv_thread_uid);
+        sceKernelTerminateDeleteThread(pc_recv_thread_uid);
         pc_recv_thread_uid = -1;
         pc_recv_busy = 0;
     }
