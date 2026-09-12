@@ -84,6 +84,37 @@ static char install_path[512] = {0};
 static char install_name[NAME_LEN] = {0};
 static char install_title[128] = {0};
 
+/* PC Quick Install receiver. Runs in its own thread so the UI never blocks
+   while waiting for the Windows app to connect. */
+static volatile int pc_recv_busy = 0;
+static volatile int pc_recv_done = 0;
+static volatile int pc_recv_result = 0;
+static SceUID pc_recv_thread_uid = -1;
+static char pc_recv_saved[512] = {0};
+
+static int pc_receive_worker(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    pc_recv_result = net_receive_one_vpk(DOWNLOAD_DIR, PC_INSTALL_PORT,
+        pc_recv_saved, sizeof(pc_recv_saved), status_line, sizeof(status_line));
+    pc_recv_busy = 0;
+    pc_recv_done = 1;
+    return 0;
+}
+
+static int start_pc_receiver(void) {
+    if (pc_recv_busy || pc_recv_thread_uid >= 0) return 0;
+    pc_recv_saved[0] = 0;
+    pc_recv_done = 0;
+    pc_recv_result = 0;
+    pc_recv_thread_uid = sceKernelCreateThread(
+        "VPKM_PC_RECV", pc_receive_worker, 0x10000100, 0x20000, 0, 0, NULL);
+    if (pc_recv_thread_uid < 0) return pc_recv_thread_uid;
+    int r = sceKernelStartThread(pc_recv_thread_uid, 0, NULL);
+    if (r < 0) { sceKernelDeleteThread(pc_recv_thread_uid); pc_recv_thread_uid = -1; return r; }
+    pc_recv_busy = 1;
+    return 0;
+}
+
 typedef struct {
     unsigned int bg;
     unsigned int panel;
@@ -861,9 +892,15 @@ int main(void) {
     load_app_background();
     vita2d_pgf *font = vita2d_load_default_pgf();
     ensure_dirs();
-    /* PC network remains disabled. Promoter modules are loaded only after X. */
-    int net_res = -1;
-    snprintf(status_line, sizeof(status_line), "Redo. X = installera vald VPK.");
+    /* Network is initialized for PC Quick Install. Promoter modules are still deferred until install. */
+    int net_res = net_receiver_init(vita_ip, sizeof(vita_ip));
+    if (net_res < 0)
+        snprintf(status_line, sizeof(status_line), "Redo. PC-natverk fel: 0x%08X", net_res);
+    else {
+        snprintf(status_line, sizeof(status_line), "PC Quick Install: %s:%d - vantar pa PC", vita_ip, PC_INSTALL_PORT);
+        int pr = start_pc_receiver();
+        if (pr < 0) snprintf(status_line, sizeof(status_line), "PC-mottagare fel: 0x%08X", pr);
+    }
 
     refresh_vpk_list();
 
@@ -933,8 +970,34 @@ int main(void) {
             preview_load_pending = 0;
             start_install_selected();
         }
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_RTRIGGER))
-            snprintf(status_line, sizeof(status_line), "PC-VPK fortfarande avstangt for stabilitet.");
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_RTRIGGER)) {
+            if (net_res < 0) snprintf(status_line, sizeof(status_line), "PC-natverk ej tillgangligt: 0x%08X", net_res);
+            else if (!pc_recv_busy && pc_recv_thread_uid < 0) start_pc_receiver();
+            else snprintf(status_line, sizeof(status_line), "PC Quick Install: %s:%d - vantar pa PC", vita_ip, PC_INSTALL_PORT);
+        }
+
+        /* Finish a received upload on the UI thread, then hand it to the
+           already-tested installer worker. */
+        if (pc_recv_done && !install_busy) {
+            pc_recv_done = 0;
+            if (pc_recv_thread_uid >= 0) {
+                sceKernelWaitThreadEnd(pc_recv_thread_uid, NULL, NULL);
+                sceKernelDeleteThread(pc_recv_thread_uid);
+                pc_recv_thread_uid = -1;
+            }
+            if (pc_recv_result < 0) {
+                snprintf(status_line, sizeof(status_line), "PC-overforing fel: 0x%08X", pc_recv_result);
+            } else {
+                scan_vpks();
+                if (select_path(pc_recv_saved) < 0) load_preview();
+                start_install_selected();
+            }
+        }
+
+        /* After an install completes, reopen the PC listener automatically. */
+        if (net_res >= 0 && !install_busy && !pc_recv_busy && !pc_recv_done && pc_recv_thread_uid < 0) {
+            start_pc_receiver();
+        }
         if (!settings_open && !install_busy && (pressed & SCE_CTRL_LTRIGGER))
             snprintf(status_line, sizeof(status_line), "PC-Tema fortfarande avstangt for stabilitet.");
         if (!settings_open && !install_busy && (pressed & SCE_CTRL_TRIANGLE)) { preview_load_pending = 0; delete_selected(); }
@@ -1061,7 +1124,12 @@ int main(void) {
     free_theme_bg();
 
 
-    /* PC network remains disabled in this build. */
+    if (pc_recv_thread_uid >= 0) {
+        sceKernelTerminateDeleteThread(pc_recv_thread_uid);
+        pc_recv_thread_uid = -1;
+        pc_recv_busy = 0;
+    }
+    if (net_res >= 0) net_receiver_term();
     vita2d_free_pgf(font);
     vita2d_fini();
     sceKernelExitProcess(0);

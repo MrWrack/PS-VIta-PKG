@@ -1,0 +1,7 @@
+PC Quick Install auto-listener fix
+- Vita starts TCP listener on port 1338 automatically at app startup.
+- Network accept runs on a worker thread; UI no longer blocks waiting for PC.
+- PC can Connect as soon as VPK Manager is open; pressing R is no longer required.
+- Received VPK is saved in ux0:/downloads, list refreshed, then existing stable installer is started.
+- Listener restarts automatically after transfer/install.
+- Existing cover, metadata, scrolling and install worker logic retained.

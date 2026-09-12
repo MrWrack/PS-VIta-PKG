@@ -1,0 +1,4 @@
+PC Quick Install enabled from the confirmed stable cover/metadata-worker base.
+- R starts the existing VPK receiver on port 1338.
+- Received VPK is saved to ux0:/downloads and then uses the existing install worker.
+- Cover worker, metadata worker, scrolling and install implementation were not rewritten.
