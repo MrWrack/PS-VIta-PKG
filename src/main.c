@@ -98,6 +98,9 @@ static volatile int theme_recv_done = 0;
 static volatile int theme_recv_result = 0;
 static SceUID theme_recv_thread_uid = -1;
 
+/* Forward declaration: used by the theme receiver before its definition. */
+static void rm_tree(const char *path);
+
 static int theme_receive_worker(SceSize args, void *argp) {
     (void)args; (void)argp;
     theme_recv_result = net_receive_theme_zip(THEME_ZIP, PC_THEME_PORT, NULL, 0);
@@ -1177,12 +1180,14 @@ int main(void) {
     free_theme_bg();
 
 
-    if (pc_recv_thread_uid >= 0) {
-        sceKernelTerminateDeleteThread(pc_recv_thread_uid);
-        pc_recv_thread_uid = -1;
-        pc_recv_busy = 0;
-    }
+    /* Receiver threads may be blocked in accept()/recv(). Do not call the
+       non-existent sceKernelTerminateDeleteThread(). Network teardown and
+       sceKernelExitProcess() clean them up when the application exits. */
     if (net_res >= 0) net_receiver_term();
+    pc_recv_thread_uid = -1;
+    pc_recv_busy = 0;
+    theme_recv_thread_uid = -1;
+    theme_recv_busy = 0;
     vita2d_free_pgf(font);
     vita2d_fini();
     sceKernelExitProcess(0);
