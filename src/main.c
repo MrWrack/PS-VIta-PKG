@@ -401,13 +401,18 @@ static void schedule_preview_load(void) {
      * user has stopped scrolling before doing the heavier cover work.
      */
     preview_load_pending = 1;
-    preview_load_delay = 5;
+    preview_load_delay = 10;
 }
 
 static void service_preview_load(void) {
     if (!preview_load_pending || install_busy || settings_open)
         return;
 
+    /*
+     * Cover work must never compete with fast scrolling.
+     * The delay is restarted by every selection change, so decoding/extraction
+     * only happens after navigation has been idle for a moment.
+     */
     if (preview_load_delay > 0) {
         preview_load_delay--;
         return;
@@ -698,6 +703,7 @@ int main(void) {
     SceCtrlData pad, oldpad;
     memset(&pad, 0, sizeof(pad)); memset(&oldpad, 0, sizeof(oldpad));
     int nav_repeat_delay = 0;
+    int nav_hold_frames = 0;
 
 
     while (1) {
@@ -712,19 +718,36 @@ int main(void) {
         if (!settings_open && !install_busy) {
             if (pressed & SCE_CTRL_UP) {
                 nav_step = -1;
-                nav_repeat_delay = 12;
+                nav_repeat_delay = 8;
+                nav_hold_frames = 0;
             } else if (pressed & SCE_CTRL_DOWN) {
                 nav_step = 1;
-                nav_repeat_delay = 12;
+                nav_repeat_delay = 8;
+                nav_hold_frames = 0;
             } else if (up_held || down_held) {
+                nav_hold_frames++;
+
                 if (nav_repeat_delay > 0) {
                     nav_repeat_delay--;
                 } else {
                     nav_step = up_held ? -1 : 1;
-                    nav_repeat_delay = 3;
+
+                    /*
+                     * Accelerate while the button stays held:
+                     * short hold = controlled,
+                     * medium hold = fast,
+                     * long hold = one item every frame.
+                     */
+                    if (nav_hold_frames < 18)
+                        nav_repeat_delay = 2;
+                    else if (nav_hold_frames < 40)
+                        nav_repeat_delay = 1;
+                    else
+                        nav_repeat_delay = 0;
                 }
             } else {
                 nav_repeat_delay = 0;
+                nav_hold_frames = 0;
             }
 
             if (nav_step < 0 && selected > 0) {

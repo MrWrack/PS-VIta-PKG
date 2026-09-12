@@ -1,0 +1,9 @@
+FAST SCROLL FIX
+
+- Installation is unchanged.
+- In-app cover GPU fix is unchanged.
+- Holding Up/Down now accelerates progressively.
+- After a long hold the selection can move one item per frame.
+- Cover loading is postponed longer while scrolling, so ZIP/PNG work does
+  not compete with rapid navigation.
+- The old cover stays visible until the new selection has been idle briefly.
