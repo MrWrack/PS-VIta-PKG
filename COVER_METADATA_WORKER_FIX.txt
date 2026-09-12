@@ -1,0 +1,11 @@
+COVER + METADATA ASYNC WORKER FIX
+
+The smooth scroll and installation code are preserved.
+
+Main fix:
+- Cover worker now uses the same known-good Vita thread priority and stack size
+  as the working install thread: priority 0x10000100, stack 0x20000.
+- If the preview thread cannot be created or started, the request is retried
+  instead of silently ending with no cover / no Title ID / no Version.
+- Preview extraction errors are surfaced in the status line for diagnosis.
+- Cover, Title ID and Version still commit together to the UI.

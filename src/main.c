@@ -377,7 +377,16 @@ static int cover_worker(SceSize args, void *argp) {
             cover_worker_has_icon = 1;
         else
             cover_worker_result = dr;
+    } else if (cover_worker_result == 0) {
+        cover_worker_result = ir;
     }
+
+    /*
+     * sr is kept in the high-level result only when both metadata and icon
+     * are unavailable.  This makes silent worker failures visible.
+     */
+    if (sr != 0 && ir != 0 && cover_worker_result == 0)
+        cover_worker_result = sr;
 
     sceIoRemove(sfo_path);
     sceIoRemove(icon_path);
@@ -412,10 +421,18 @@ static void start_cover_worker(void) {
     cover_worker_busy = 1;
 
     cover_thread_uid = sceKernelCreateThread(
-        "VPKM_COVER", cover_worker, 0x10000140, 0x18000, 0, 0, NULL);
+        "VPKM_COVER", cover_worker, 0x10000100, 0x20000, 0, 0, NULL);
 
     if (cover_thread_uid < 0) {
+        int err = cover_thread_uid;
         cover_worker_busy = 0;
+        cover_thread_uid = -1;
+
+        /* Retry instead of silently ending on "Ingen ikon". */
+        preview_load_pending = 1;
+        preview_load_delay = 6;
+        snprintf(status_line, sizeof(status_line),
+                 "Cover-trad kunde inte skapas: 0x%08X - forsoker igen", err);
         return;
     }
 
@@ -424,6 +441,12 @@ static void start_cover_worker(void) {
         sceKernelDeleteThread(cover_thread_uid);
         cover_thread_uid = -1;
         cover_worker_busy = 0;
+
+        /* Retry instead of losing cover + metadata request. */
+        preview_load_pending = 1;
+        preview_load_delay = 6;
+        snprintf(status_line, sizeof(status_line),
+                 "Cover-trad kunde inte startas: 0x%08X - forsoker igen", r);
     }
 }
 
@@ -534,6 +557,14 @@ static void service_preview_load(void) {
              */
             preview_load_pending = 0;
             preview_load_delay = 0;
+
+            if (cover_worker_result < 0 &&
+                !cover_worker_has_icon &&
+                !meta.titleid[0] &&
+                !meta.version[0]) {
+                snprintf(status_line, sizeof(status_line),
+                         "Preview kunde inte lasas: %d", cover_worker_result);
+            }
         }
     }
 
