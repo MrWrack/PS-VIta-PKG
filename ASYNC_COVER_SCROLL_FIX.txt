@@ -1,0 +1,10 @@
+ASYNC COVER SCROLL FIX
+
+This specifically fixes the pause that appeared around the 4th/5th scroll step.
+
+- Installation is unchanged.
+- Cover extraction and PNG decoding now run on a background Vita thread.
+- The list/UI thread never waits for ZIP extraction or PNG decoding.
+- If you scroll again while a cover is decoding, the old result is discarded.
+- Only the latest selected VPK cover is applied.
+- The stable persistent GPU texture fix remains in place.

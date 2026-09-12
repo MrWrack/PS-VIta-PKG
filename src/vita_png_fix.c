@@ -424,3 +424,103 @@ read_fail:
 
     return 0;
 }
+
+
+/* CPU-only cover decoder used by the background preview worker. */
+int vita_decode_preview_rgba128(const char *path, unsigned char *out_rgba, unsigned int out_size) {
+    if (!out_rgba || out_size < 128u * 128u * 4u) return -201;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return -202;
+
+    unsigned char sig[8];
+    if (fread(sig, 1, 8, fp) != 8 || png_sig_cmp(sig, 0, 8)) {
+        fclose(fp); return -203;
+    }
+
+    png_structp rp = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    png_infop ri = rp ? png_create_info_struct(rp) : NULL;
+    if (!rp || !ri) {
+        if (rp) png_destroy_read_struct(&rp, NULL, NULL);
+        fclose(fp); return -204;
+    }
+
+    unsigned char *pixels = NULL;
+    png_bytep *rows = NULL;
+    int ret = 0;
+
+    if (setjmp(png_jmpbuf(rp))) {
+        ret = -205;
+        goto done;
+    }
+
+    png_init_io(rp, fp);
+    png_set_sig_bytes(rp, 8);
+    png_read_info(rp, ri);
+
+    png_uint_32 w = png_get_image_width(rp, ri);
+    png_uint_32 h = png_get_image_height(rp, ri);
+    int bit_depth = png_get_bit_depth(rp, ri);
+    int color_type = png_get_color_type(rp, ri);
+
+    if (w == 0 || h == 0 || w > 2048 || h > 2048) {
+        ret = -206;
+        goto done;
+    }
+
+    if (bit_depth == 16) png_set_strip_16(rp);
+    if (color_type == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(rp);
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+        png_set_expand_gray_1_2_4_to_8(rp);
+    if (png_get_valid(rp, ri, PNG_INFO_tRNS))
+        png_set_tRNS_to_alpha(rp);
+    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+        png_set_gray_to_rgb(rp);
+
+    if (!(color_type & PNG_COLOR_MASK_ALPHA) &&
+        !png_get_valid(rp, ri, PNG_INFO_tRNS))
+        png_set_add_alpha(rp, 0xff, PNG_FILLER_AFTER);
+
+    png_read_update_info(rp, ri);
+
+    if (png_get_bit_depth(rp, ri) != 8 ||
+        png_get_color_type(rp, ri) != PNG_COLOR_TYPE_RGBA) {
+        ret = -207;
+        goto done;
+    }
+
+    size_t rowbytes = png_get_rowbytes(rp, ri);
+    pixels = (unsigned char *)malloc(rowbytes * h);
+    rows = (png_bytep *)malloc(sizeof(png_bytep) * h);
+    if (!pixels || !rows) {
+        ret = -208;
+        goto done;
+    }
+
+    for (png_uint_32 y = 0; y < h; ++y)
+        rows[y] = pixels + (size_t)y * rowbytes;
+
+    png_read_image(rp, rows);
+    png_read_end(rp, NULL);
+
+    for (unsigned int y = 0; y < 128; ++y) {
+        png_uint_32 sy = (png_uint_32)(((unsigned long long)y * h) / 128u);
+        if (sy >= h) sy = h - 1;
+
+        for (unsigned int x = 0; x < 128; ++x) {
+            png_uint_32 sx = (png_uint_32)(((unsigned long long)x * w) / 128u);
+            if (sx >= w) sx = w - 1;
+
+            const unsigned char *s = rows[sy] + (size_t)sx * 4u;
+            unsigned char *d = out_rgba + ((size_t)y * 128u + x) * 4u;
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+        }
+    }
+
+done:
+    free(rows);
+    free(pixels);
+    png_destroy_read_struct(&rp, &ri, NULL);
+    fclose(fp);
+    return ret;
+}

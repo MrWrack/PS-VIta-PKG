@@ -56,6 +56,19 @@ static int scroll = 0;
 static VpkMeta meta;
 static vita2d_texture *preview_icon = NULL;
 static int preview_icon_valid = 0;
+
+static volatile int cover_worker_busy = 0;
+static volatile int cover_worker_done = 0;
+static volatile int cover_worker_result = 0;
+static volatile unsigned int cover_request_serial = 0;
+static unsigned int cover_worker_serial = 0;
+static SceUID cover_thread_uid = -1;
+static char cover_worker_vpk[512] = {0};
+static char cover_worker_name[NAME_LEN] = {0};
+static unsigned char cover_worker_pixels[128 * 128 * 4];
+static VpkMeta cover_worker_meta;
+static int cover_worker_has_icon = 0;
+
 static char status_line[256] = "Klar.";
 static char vita_ip[32] = "-";
 
@@ -272,154 +285,169 @@ static void scan_vpks(void) {
 }
 
 static void clear_preview(void) {
-    /* Keep the GPU texture alive while browsing.  Repeatedly freeing and
-       recreating the preview texture while moving Up/Down caused GXM crashes. */
     preview_icon_valid = 0;
     memset(&meta, 0, sizeof(meta));
-
-    char icon_path[512];
-    char sfo_path[512];
-
-    snprintf(icon_path, sizeof(icon_path), "%s/icon0.png", PREVIEW_DIR);
-    snprintf(sfo_path, sizeof(sfo_path), "%s/param.sfo", PREVIEW_DIR);
-
-    sceIoRemove(icon_path);
-    sceIoRemove(sfo_path);
-
-    snprintf(icon_path, sizeof(icon_path), "%s/sce_sys/icon0.png", PREVIEW_DIR);
-    sceIoRemove(icon_path);
 }
 
-static void load_preview(void) {
-    clear_preview();
+static int cover_worker(SceSize args, void *argp) {
+    (void)args;
+    (void)argp;
 
-    if (file_count <= 0)
-        return;
-
-    if (selected < 0 || selected >= file_count)
-        selected = 0;
+    memset(&cover_worker_meta, 0, sizeof(cover_worker_meta));
+    cover_worker_has_icon = 0;
+    cover_worker_result = 0;
 
     sceIoMkdir(PREVIEW_DIR, 0777);
 
     char sfo_path[512];
-    snprintf(sfo_path, sizeof(sfo_path), "%s/param.sfo", PREVIEW_DIR);
+    char icon_path[512];
+    snprintf(sfo_path, sizeof(sfo_path), "%s/async_param.sfo", PREVIEW_DIR);
+    snprintf(icon_path, sizeof(icon_path), "%s/async_icon.png", PREVIEW_DIR);
+    sceIoRemove(sfo_path);
+    sceIoRemove(icon_path);
 
-    /* Metadata is kept enabled. */
-    int sr = zip_extract_named(files[selected].path,
-                               "sce_sys/param.sfo",
-                               sfo_path);
-
+    int sr = zip_extract_named(cover_worker_vpk, "sce_sys/param.sfo", sfo_path);
     if (sr == 0) {
         if (sfo_get_string(sfo_path, "TITLE",
-                           meta.title, sizeof(meta.title)) < 0) {
-            snprintf(meta.title, sizeof(meta.title),
-                     "%s", files[selected].name);
+                           cover_worker_meta.title,
+                           sizeof(cover_worker_meta.title)) < 0) {
+            snprintf(cover_worker_meta.title,
+                     sizeof(cover_worker_meta.title),
+                     "%s", cover_worker_name);
         }
-
         sfo_get_string(sfo_path, "TITLE_ID",
-                       meta.titleid, sizeof(meta.titleid));
-
+                       cover_worker_meta.titleid,
+                       sizeof(cover_worker_meta.titleid));
         sfo_get_string(sfo_path, "APP_VER",
-                       meta.version, sizeof(meta.version));
-
-        meta.valid = 1;
+                       cover_worker_meta.version,
+                       sizeof(cover_worker_meta.version));
+        cover_worker_meta.valid = 1;
     } else {
-        snprintf(meta.title, sizeof(meta.title),
-                 "%s", files[selected].name);
-        meta.valid = 1;
+        snprintf(cover_worker_meta.title,
+                 sizeof(cover_worker_meta.title),
+                 "%s", cover_worker_name);
+        cover_worker_meta.valid = 1;
     }
 
-    /* Safe VPK cover loading. Extract icon0.png into an isolated preview
-       sce_sys directory, normalize it to Vita-safe indexed PNG8 first, and
-       only then hand it to vita2d. This keeps malformed source PNGs away
-       from the renderer. */
-    {
-        char preview_sce[512];
-        char icon_path[512];
-        snprintf(preview_sce, sizeof(preview_sce), "%s/sce_sys", PREVIEW_DIR);
-        snprintf(icon_path, sizeof(icon_path), "%s/icon0.png", preview_sce);
-        sceIoMkdir(preview_sce, 0777);
-        sceIoRemove(icon_path);
+    int ir = zip_extract_named(cover_worker_vpk, "sce_sys/icon0.png", icon_path);
+    if (ir == 0) {
+        int dr = vita_decode_preview_rgba128(
+            icon_path, cover_worker_pixels, sizeof(cover_worker_pixels));
+        if (dr == 0)
+            cover_worker_has_icon = 1;
+        else
+            cover_worker_result = dr;
+    }
 
-        int ir = zip_extract_named(files[selected].path,
-                                   "sce_sys/icon0.png",
-                                   icon_path);
-        if (ir == 0) {
-            /* Preview icons are rewritten to plain 128x128 RGB8.  Do NOT use
-               the promoter PNG8 conversion here; that format is for install
-               resources, not live vita2d texture churn. */
-            int fr = vita_make_preview_rgb128(icon_path);
-            if (fr == 0) {
-                vita2d_texture *decoded = vita2d_load_PNG_file(icon_path);
-                if (decoded) {
-                    unsigned int w = vita2d_texture_get_width(decoded);
-                    unsigned int h = vita2d_texture_get_height(decoded);
+    sceIoRemove(sfo_path);
+    sceIoRemove(icon_path);
 
-                    if (!preview_icon)
-                        preview_icon = vita2d_create_empty_texture(128, 128);
+    cover_worker_done = 1;
+    cover_worker_busy = 0;
+    return 0;
+}
 
-                    if (preview_icon && w == 128 && h == 128) {
-                        /* Wait until the previous frame has finished before
-                           touching the persistent texture memory. */
-                        vita2d_wait_rendering_done();
+static void start_cover_worker(void) {
+    if (cover_worker_busy || file_count <= 0 ||
+        selected < 0 || selected >= file_count)
+        return;
 
-                        unsigned char *srcp =
-                            (unsigned char *)vita2d_texture_get_datap(decoded);
-                        unsigned char *dstp =
-                            (unsigned char *)vita2d_texture_get_datap(preview_icon);
-                        unsigned int src_stride =
-                            vita2d_texture_get_stride(decoded);
-                        unsigned int dst_stride =
-                            vita2d_texture_get_stride(preview_icon);
+    snprintf(cover_worker_vpk, sizeof(cover_worker_vpk),
+             "%s", files[selected].path);
+    snprintf(cover_worker_name, sizeof(cover_worker_name),
+             "%s", files[selected].name);
 
-                        if (srcp && dstp) {
-                            for (unsigned int y = 0; y < 128; ++y) {
-                                memcpy(dstp + y * dst_stride,
-                                       srcp + y * src_stride,
-                                       128 * 4);
-                            }
-                            preview_icon_valid = 1;
-                        }
-                    }
+    cover_worker_serial = cover_request_serial;
+    cover_worker_done = 0;
+    cover_worker_result = 0;
+    cover_worker_has_icon = 0;
+    cover_worker_busy = 1;
 
-                    vita2d_wait_rendering_done();
-                    vita2d_free_texture(decoded);
-                }
-            } else {
-                snprintf(status_line, sizeof(status_line),
-                         "Cover kunde inte lasas: %d", fr);
-            }
-        }
+    cover_thread_uid = sceKernelCreateThread(
+        "VPKM_COVER", cover_worker, 0x10000140, 0x18000, 0, 0, NULL);
+
+    if (cover_thread_uid < 0) {
+        cover_worker_busy = 0;
+        return;
+    }
+
+    int r = sceKernelStartThread(cover_thread_uid, 0, NULL);
+    if (r < 0) {
+        sceKernelDeleteThread(cover_thread_uid);
+        cover_thread_uid = -1;
+        cover_worker_busy = 0;
     }
 }
 
+static void load_preview(void) {
+    cover_request_serial++;
+    preview_load_pending = 1;
+    preview_load_delay = 4;
+}
 
 static void schedule_preview_load(void) {
-    /*
-     * Do not decode/extract a cover in the same frame as D-pad movement.
-     * This lets the list move immediately and waits a few frames until the
-     * user has stopped scrolling before doing the heavier cover work.
-     */
+    cover_request_serial++;
     preview_load_pending = 1;
-    preview_load_delay = 10;
+    preview_load_delay = 4;
 }
 
 static void service_preview_load(void) {
+    /* Reap finished worker. */
+    if (!cover_worker_busy && cover_thread_uid >= 0) {
+        sceKernelWaitThreadEnd(cover_thread_uid, NULL, NULL);
+        sceKernelDeleteThread(cover_thread_uid);
+        cover_thread_uid = -1;
+    }
+
+    /* Apply only if this result still belongs to the current selection. */
+    if (cover_worker_done) {
+        cover_worker_done = 0;
+
+        if (cover_worker_serial == cover_request_serial) {
+            meta = cover_worker_meta;
+
+            if (cover_worker_has_icon) {
+                if (!preview_icon)
+                    preview_icon = vita2d_create_empty_texture(128, 128);
+
+                if (preview_icon) {
+                    vita2d_wait_rendering_done();
+
+                    unsigned char *dstp =
+                        (unsigned char *)vita2d_texture_get_datap(preview_icon);
+                    unsigned int dst_stride =
+                        vita2d_texture_get_stride(preview_icon);
+
+                    if (dstp) {
+                        for (unsigned int y = 0; y < 128; ++y) {
+                            memcpy(dstp + y * dst_stride,
+                                   cover_worker_pixels + y * 128u * 4u,
+                                   128u * 4u);
+                        }
+                        preview_icon_valid = 1;
+                    }
+                }
+            } else {
+                preview_icon_valid = 0;
+            }
+        }
+    }
+
     if (!preview_load_pending || install_busy || settings_open)
         return;
 
-    /*
-     * Cover work must never compete with fast scrolling.
-     * The delay is restarted by every selection change, so decoding/extraction
-     * only happens after navigation has been idle for a moment.
-     */
     if (preview_load_delay > 0) {
         preview_load_delay--;
         return;
     }
 
+    /* If an older cover is still decoding, keep scrolling responsive.
+       As soon as it finishes, this pending request starts automatically. */
+    if (cover_worker_busy)
+        return;
+
     preview_load_pending = 0;
-    load_preview();
+    start_cover_worker();
 }
 
 static void refresh_vpk_list(void) {
@@ -870,6 +898,11 @@ int main(void) {
     }
 
     clear_preview();
+    if (cover_thread_uid >= 0) {
+        sceKernelWaitThreadEnd(cover_thread_uid, NULL, NULL);
+        sceKernelDeleteThread(cover_thread_uid);
+        cover_thread_uid = -1;
+    }
     if (preview_icon) {
         vita2d_wait_rendering_done();
         vita2d_free_texture(preview_icon);
