@@ -64,6 +64,7 @@ static volatile unsigned int cover_request_serial = 0;
 static unsigned int cover_worker_serial = 0;
 static SceUID cover_thread_uid = -1;
 static char cover_worker_vpk[512] = {0};
+static char cover_worker_selected_path[512] = {0};
 static char cover_worker_name[NAME_LEN] = {0};
 static unsigned char cover_worker_pixels[128 * 128 * 4];
 static VpkMeta cover_worker_meta;
@@ -289,6 +290,56 @@ static void clear_preview(void) {
     memset(&meta, 0, sizeof(meta));
 }
 
+
+static void load_vpk_metadata_from_sfo(const char *sfo_path,
+                                       const char *fallback_name,
+                                       VpkMeta *out) {
+    memset(out, 0, sizeof(*out));
+
+    if (sfo_get_string(sfo_path, "TITLE",
+                       out->title, sizeof(out->title)) < 0 ||
+        !out->title[0]) {
+        snprintf(out->title, sizeof(out->title), "%s", fallback_name);
+    }
+
+    if (sfo_get_string(sfo_path, "TITLE_ID",
+                       out->titleid, sizeof(out->titleid)) < 0 ||
+        !out->titleid[0]) {
+        char content_id[128] = {0};
+
+        /*
+         * Most Vita CONTENT_ID values contain the title id after the first
+         * dash, e.g. EP9000-PCSF00001_00-...
+         */
+        if (sfo_get_string(sfo_path, "CONTENT_ID",
+                           content_id, sizeof(content_id)) == 0) {
+            const char *dash = strchr(content_id, '-');
+            if (dash && dash[1]) {
+                dash++;
+                size_t n = 0;
+                while (dash[n] &&
+                       dash[n] != '_' &&
+                       dash[n] != '-' &&
+                       n + 1 < sizeof(out->titleid)) {
+                    out->titleid[n] = dash[n];
+                    n++;
+                }
+                out->titleid[n] = 0;
+            }
+        }
+    }
+
+    if (sfo_get_string(sfo_path, "APP_VER",
+                       out->version, sizeof(out->version)) < 0 ||
+        !out->version[0]) {
+        /* Some homebrew SFOs use VERSION instead of APP_VER. */
+        sfo_get_string(sfo_path, "VERSION",
+                       out->version, sizeof(out->version));
+    }
+
+    out->valid = 1;
+}
+
 static int cover_worker(SceSize args, void *argp) {
     (void)args;
     (void)argp;
@@ -308,20 +359,8 @@ static int cover_worker(SceSize args, void *argp) {
 
     int sr = zip_extract_named(cover_worker_vpk, "sce_sys/param.sfo", sfo_path);
     if (sr == 0) {
-        if (sfo_get_string(sfo_path, "TITLE",
-                           cover_worker_meta.title,
-                           sizeof(cover_worker_meta.title)) < 0) {
-            snprintf(cover_worker_meta.title,
-                     sizeof(cover_worker_meta.title),
-                     "%s", cover_worker_name);
-        }
-        sfo_get_string(sfo_path, "TITLE_ID",
-                       cover_worker_meta.titleid,
-                       sizeof(cover_worker_meta.titleid));
-        sfo_get_string(sfo_path, "APP_VER",
-                       cover_worker_meta.version,
-                       sizeof(cover_worker_meta.version));
-        cover_worker_meta.valid = 1;
+        load_vpk_metadata_from_sfo(sfo_path, cover_worker_name,
+                                   &cover_worker_meta);
     } else {
         snprintf(cover_worker_meta.title,
                  sizeof(cover_worker_meta.title),
@@ -354,6 +393,8 @@ static void start_cover_worker(void) {
 
     snprintf(cover_worker_vpk, sizeof(cover_worker_vpk),
              "%s", files[selected].path);
+    snprintf(cover_worker_selected_path, sizeof(cover_worker_selected_path),
+             "%s", files[selected].path);
     snprintf(cover_worker_name, sizeof(cover_worker_name),
              "%s", files[selected].name);
 
@@ -382,13 +423,31 @@ static void start_cover_worker(void) {
 static void load_preview(void) {
     cover_request_serial++;
     preview_load_pending = 1;
-    preview_load_delay = 4;
+    preview_load_delay = 2;
+
+    memset(&meta, 0, sizeof(meta));
+    if (file_count > 0 && selected >= 0 && selected < file_count) {
+        snprintf(meta.title, sizeof(meta.title),
+                 "%s", files[selected].name);
+        meta.valid = 1;
+    }
 }
 
 static void schedule_preview_load(void) {
     cover_request_serial++;
     preview_load_pending = 1;
-    preview_load_delay = 4;
+    preview_load_delay = 2;
+
+    /*
+     * Keep the selected filename visible immediately, but clear stale
+     * metadata until the new VPK's param.sfo has arrived.
+     */
+    memset(&meta, 0, sizeof(meta));
+    if (file_count > 0 && selected >= 0 && selected < file_count) {
+        snprintf(meta.title, sizeof(meta.title),
+                 "%s", files[selected].name);
+        meta.valid = 1;
+    }
 }
 
 static void service_preview_load(void) {
@@ -403,7 +462,9 @@ static void service_preview_load(void) {
     if (cover_worker_done) {
         cover_worker_done = 0;
 
-        if (cover_worker_serial == cover_request_serial) {
+        if (file_count > 0 &&
+            selected >= 0 && selected < file_count &&
+            !strcmp(files[selected].path, cover_worker_selected_path)) {
             meta = cover_worker_meta;
 
             if (cover_worker_has_icon) {
@@ -844,12 +905,22 @@ int main(void) {
             vita2d_draw_texture_scale(preview_icon, 708, 105, sx, sy);
         } else {
             vita2d_draw_rectangle(708, 105, 128, 128, RGBA8(50,50,55,255));
-            draw_text(font, 731, 174, RGBA8(160,160,160,255), 0.65f, "Ingen ikon");
+            if (cover_worker_busy || preview_load_pending)
+                draw_text(font, 724, 174, RGBA8(160,160,160,255), 0.65f, "Laddar...");
+            else
+                draw_text(font, 731, 174, RGBA8(160,160,160,255), 0.65f, "Ingen ikon");
         }
         draw_text(font, 625, 270, theme.accent, 0.73f, meta.title[0] ? meta.title : "Okand app");
         char info[180];
-        snprintf(info,sizeof(info),"Title ID: %s", meta.titleid[0] ? meta.titleid : "-"); draw_text(font,625,305,RGBA8(220,220,220,255),0.65f,info);
-        snprintf(info,sizeof(info),"Version: %s", meta.version[0] ? meta.version : "-"); draw_text(font,625,335,RGBA8(220,220,220,255),0.65f,info);
+        snprintf(info,sizeof(info),"Title ID: %s",
+                 meta.titleid[0] ? meta.titleid :
+                 ((cover_worker_busy || preview_load_pending) ? "Laddar..." : "-"));
+        draw_text(font,625,305,RGBA8(220,220,220,255),0.65f,info);
+
+        snprintf(info,sizeof(info),"Version: %s",
+                 meta.version[0] ? meta.version :
+                 ((cover_worker_busy || preview_load_pending) ? "Laddar..." : "-"));
+        draw_text(font,625,335,RGBA8(220,220,220,255),0.65f,info);
         if (file_count > 0) { snprintf(info,sizeof(info),"Fil: %.2f MB",(double)files[selected].size/(1024.0*1024.0)); draw_text(font,625,365,RGBA8(220,220,220,255),0.65f,info); }
 
         draw_text(font, 28, 500, RGBA8(235,235,235,255), 0.64f, "X Installera  R PC-VPK  L PC-Tema  Triangle Ta bort  Square Uppdatera  START Tema  O Avsluta");

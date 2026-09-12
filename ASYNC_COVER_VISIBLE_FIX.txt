@@ -1,0 +1,7 @@
+ASYNC COVER VISIBLE FIX
+
+- Keeps the smooth background-thread scrolling from the previous build.
+- Fixes cover results being discarded by the request serial while scrolling.
+- A decoded cover is now applied when it still belongs to the currently selected VPK path.
+- Shows 'Laddar...' while the background cover worker is active.
+- Installation remains unchanged.

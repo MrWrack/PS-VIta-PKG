@@ -1,0 +1,9 @@
+TITLE ID + VERSION FIX
+
+- Keeps the smooth async cover scrolling.
+- Reads TITLE_ID and APP_VER from sce_sys/param.sfo in the background.
+- Falls back to extracting Title ID from CONTENT_ID.
+- Falls back from APP_VER to VERSION for homebrew that uses that key.
+- Clears stale metadata when changing selection.
+- Shows 'Laddar...' while metadata is being read.
+- Installation code is unchanged.
