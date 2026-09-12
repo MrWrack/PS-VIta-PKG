@@ -1,0 +1,8 @@
+VPK cover scroll GPU fix
+
+- This does NOT change installation.
+- This does NOT change the LiveArea/bubble icon.
+- It only changes the cover shown inside VPK Manager while browsing.
+- The preview GPU texture now stays allocated for the whole app.
+- Up/Down updates its pixels instead of destroying/recreating the displayed texture.
+- GPU sync is performed before copying new cover pixels.

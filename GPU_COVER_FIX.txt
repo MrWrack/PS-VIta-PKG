@@ -1,0 +1,9 @@
+GPU COVER FIX
+
+- VPK install/progress code is unchanged.
+- Before freeing a cover texture, the app waits for the GPU to finish.
+- Extracted VPK icon0.png is rewritten to a simple 128x128 RGB8 PNG before
+  vita2d loads it.
+- The indexed PNG8 conversion remains only for package-install resources.
+
+This targets the GPU crash that appeared when covers were enabled.

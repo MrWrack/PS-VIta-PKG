@@ -52,6 +52,7 @@ static int selected = 0;
 static int scroll = 0;
 static VpkMeta meta;
 static vita2d_texture *preview_icon = NULL;
+static int preview_icon_valid = 0;
 static char status_line[256] = "Klar.";
 static char vita_ip[32] = "-";
 
@@ -268,15 +269,11 @@ static void scan_vpks(void) {
 }
 
 static void clear_preview(void) {
-    if (preview_icon) {
-        vita2d_free_texture(preview_icon);
-        preview_icon = NULL;
-    }
-
+    /* Keep the GPU texture alive while browsing.  Repeatedly freeing and
+       recreating the preview texture while moving Up/Down caused GXM crashes. */
+    preview_icon_valid = 0;
     memset(&meta, 0, sizeof(meta));
 
-    /* Safer than recursively deleting the whole preview directory
-       every time the selection changes. */
     char icon_path[512];
     char sfo_path[512];
 
@@ -285,6 +282,7 @@ static void clear_preview(void) {
 
     sceIoRemove(icon_path);
     sceIoRemove(sfo_path);
+
     snprintf(icon_path, sizeof(icon_path), "%s/sce_sys/icon0.png", PREVIEW_DIR);
     sceIoRemove(icon_path);
 }
@@ -335,8 +333,6 @@ static void load_preview(void) {
     {
         char preview_sce[512];
         char icon_path[512];
-        int fixed = 0;
-
         snprintf(preview_sce, sizeof(preview_sce), "%s/sce_sys", PREVIEW_DIR);
         snprintf(icon_path, sizeof(icon_path), "%s/icon0.png", preview_sce);
         sceIoMkdir(preview_sce, 0777);
@@ -346,9 +342,49 @@ static void load_preview(void) {
                                    "sce_sys/icon0.png",
                                    icon_path);
         if (ir == 0) {
-            int fr = vita_fix_sce_sys_pngs(PREVIEW_DIR, &fixed);
+            /* Preview icons are rewritten to plain 128x128 RGB8.  Do NOT use
+               the promoter PNG8 conversion here; that format is for install
+               resources, not live vita2d texture churn. */
+            int fr = vita_make_preview_rgb128(icon_path);
             if (fr == 0) {
-                preview_icon = vita2d_load_PNG_file(icon_path);
+                vita2d_texture *decoded = vita2d_load_PNG_file(icon_path);
+                if (decoded) {
+                    unsigned int w = vita2d_texture_get_width(decoded);
+                    unsigned int h = vita2d_texture_get_height(decoded);
+
+                    if (!preview_icon)
+                        preview_icon = vita2d_create_empty_texture(128, 128);
+
+                    if (preview_icon && w == 128 && h == 128) {
+                        /* Wait until the previous frame has finished before
+                           touching the persistent texture memory. */
+                        vita2d_wait_rendering_done();
+
+                        unsigned char *srcp =
+                            (unsigned char *)vita2d_texture_get_datap(decoded);
+                        unsigned char *dstp =
+                            (unsigned char *)vita2d_texture_get_datap(preview_icon);
+                        unsigned int src_stride =
+                            vita2d_texture_get_stride(decoded);
+                        unsigned int dst_stride =
+                            vita2d_texture_get_stride(preview_icon);
+
+                        if (srcp && dstp) {
+                            for (unsigned int y = 0; y < 128; ++y) {
+                                memcpy(dstp + y * dst_stride,
+                                       srcp + y * src_stride,
+                                       128 * 4);
+                            }
+                            preview_icon_valid = 1;
+                        }
+                    }
+
+                    vita2d_wait_rendering_done();
+                    vita2d_free_texture(decoded);
+                }
+            } else {
+                snprintf(status_line, sizeof(status_line),
+                         "Cover kunde inte lasas: %d", fr);
             }
         }
     }
@@ -693,7 +729,7 @@ int main(void) {
         if (file_count == 0) draw_text(font, 30, 130, RGBA8(220,220,220,255), 0.85f, "Inga .vpk-filer hittades.");
 
         vita2d_draw_rectangle(605, 84, 335, 370, theme.panel);
-        if (preview_icon) {
+        if (preview_icon && preview_icon_valid) {
             float sx = 128.0f / vita2d_texture_get_width(preview_icon);
             float sy = 128.0f / vita2d_texture_get_height(preview_icon);
             vita2d_draw_texture_scale(preview_icon, 708, 105, sx, sy);
@@ -753,6 +789,11 @@ int main(void) {
     }
 
     clear_preview();
+    if (preview_icon) {
+        vita2d_wait_rendering_done();
+        vita2d_free_texture(preview_icon);
+        preview_icon = NULL;
+    }
     rm_tree(INSTALL_DIR);
     free_theme_bg();
 

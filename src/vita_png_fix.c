@@ -260,3 +260,167 @@ int vita_fix_sce_sys_pngs(const char *install_dir, int *fixed_count) {
 
     return r;
 }
+
+
+/*
+ * Preview-only converter.
+ * libvita2d has known edge cases with some PNG layouts.  For covers we first
+ * rewrite the source as a plain non-interlaced RGB8 128x128 image.  This is
+ * intentionally separate from the indexed PNG8 conversion used by the Vita
+ * package promoter.
+ */
+int vita_make_preview_rgb128(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return -101;
+
+    unsigned char sig[8];
+    if (fread(sig, 1, 8, fp) != 8 || png_sig_cmp(sig, 0, 8)) {
+        fclose(fp);
+        return -102;
+    }
+
+    png_structp rp = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    png_infop ri = rp ? png_create_info_struct(rp) : NULL;
+    if (!rp || !ri) {
+        if (rp) png_destroy_read_struct(&rp, NULL, NULL);
+        fclose(fp);
+        return -103;
+    }
+
+    unsigned char *pixels = NULL;
+    png_bytep *rows = NULL;
+    unsigned char *scaled = NULL;
+    int ret = 0;
+
+    if (setjmp(png_jmpbuf(rp))) {
+        ret = -104;
+        goto read_fail;
+    }
+
+    png_init_io(rp, fp);
+    png_set_sig_bytes(rp, 8);
+    png_read_info(rp, ri);
+
+    png_uint_32 w = png_get_image_width(rp, ri);
+    png_uint_32 h = png_get_image_height(rp, ri);
+    int bit_depth = png_get_bit_depth(rp, ri);
+    int color_type = png_get_color_type(rp, ri);
+
+    if (w == 0 || h == 0 || w > 2048 || h > 2048) {
+        ret = -105;
+        goto read_fail;
+    }
+
+    if (bit_depth == 16) png_set_strip_16(rp);
+    if (color_type == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(rp);
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+        png_set_expand_gray_1_2_4_to_8(rp);
+    if (png_get_valid(rp, ri, PNG_INFO_tRNS)) png_set_tRNS_to_alpha(rp);
+    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+        png_set_gray_to_rgb(rp);
+
+    /* Preview texture does not need alpha. Composite by simply dropping it. */
+    if ((color_type & PNG_COLOR_MASK_ALPHA) || png_get_valid(rp, ri, PNG_INFO_tRNS))
+        png_set_strip_alpha(rp);
+
+    png_read_update_info(rp, ri);
+    size_t rowbytes = png_get_rowbytes(rp, ri);
+
+    /* After transforms we expect exactly RGB8. */
+    if (png_get_bit_depth(rp, ri) != 8 || png_get_color_type(rp, ri) != PNG_COLOR_TYPE_RGB) {
+        ret = -106;
+        goto read_fail;
+    }
+
+    pixels = (unsigned char *)malloc(rowbytes * h);
+    rows = (png_bytep *)malloc(sizeof(png_bytep) * h);
+    if (!pixels || !rows) {
+        ret = -107;
+        goto read_fail;
+    }
+
+    for (png_uint_32 y = 0; y < h; ++y)
+        rows[y] = pixels + (size_t)y * rowbytes;
+
+    png_read_image(rp, rows);
+    png_read_end(rp, NULL);
+
+    scaled = (unsigned char *)malloc(128u * 128u * 3u);
+    if (!scaled) {
+        ret = -108;
+        goto read_fail;
+    }
+
+    /* Nearest-neighbour is enough for a 128x128 app icon and keeps this tiny. */
+    for (unsigned int y = 0; y < 128; ++y) {
+        png_uint_32 sy = (png_uint_32)(((unsigned long long)y * h) / 128u);
+        if (sy >= h) sy = h - 1;
+        for (unsigned int x = 0; x < 128; ++x) {
+            png_uint_32 sx = (png_uint_32)(((unsigned long long)x * w) / 128u);
+            if (sx >= w) sx = w - 1;
+            unsigned char *d = scaled + ((size_t)y * 128u + x) * 3u;
+            unsigned char *s = rows[sy] + (size_t)sx * 3u;
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2];
+        }
+    }
+
+read_fail:
+    png_destroy_read_struct(&rp, &ri, NULL);
+    fclose(fp);
+    free(rows);
+    free(pixels);
+    if (ret < 0) {
+        free(scaled);
+        return ret;
+    }
+
+    char tmp[1024];
+    snprintf(tmp, sizeof(tmp), "%s.cover_tmp", path);
+    FILE *wf = fopen(tmp, "wb");
+    if (!wf) {
+        free(scaled);
+        return -109;
+    }
+
+    png_structp wp = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    png_infop wi = wp ? png_create_info_struct(wp) : NULL;
+    if (!wp || !wi) {
+        if (wp) png_destroy_write_struct(&wp, NULL);
+        fclose(wf);
+        remove(tmp);
+        free(scaled);
+        return -110;
+    }
+
+    if (setjmp(png_jmpbuf(wp))) {
+        png_destroy_write_struct(&wp, &wi);
+        fclose(wf);
+        remove(tmp);
+        free(scaled);
+        return -111;
+    }
+
+    png_init_io(wp, wf);
+    png_set_IHDR(wp, wi, 128, 128, 8, PNG_COLOR_TYPE_RGB,
+                 PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+                 PNG_FILTER_TYPE_DEFAULT);
+    png_write_info(wp, wi);
+
+    png_bytep out_rows[128];
+    for (int y = 0; y < 128; ++y)
+        out_rows[y] = scaled + (size_t)y * 128u * 3u;
+
+    png_write_image(wp, out_rows);
+    png_write_end(wp, NULL);
+    png_destroy_write_struct(&wp, &wi);
+    fclose(wf);
+    free(scaled);
+
+    remove(path);
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return -112;
+    }
+
+    return 0;
+}
