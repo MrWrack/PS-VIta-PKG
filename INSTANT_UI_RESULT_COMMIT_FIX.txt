@@ -1,0 +1,8 @@
+INSTANT UI RESULT COMMIT FIX
+
+- Keeps the current smooth asynchronous scrolling.
+- Cover, Title ID and Version are published to the UI together.
+- 'Laddar...' ends on the same frame the worker result is committed.
+- Stale results from an older selection are discarded.
+- A stale worker no longer causes an additional visible wait before the newest VPK starts loading.
+- Installation code is unchanged.

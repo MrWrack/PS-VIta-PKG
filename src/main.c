@@ -59,6 +59,7 @@ static int preview_icon_valid = 0;
 
 static volatile int cover_worker_busy = 0;
 static volatile int cover_worker_done = 0;
+static volatile int cover_result_ready = 0;
 static volatile int cover_worker_result = 0;
 static volatile unsigned int cover_request_serial = 0;
 static unsigned int cover_worker_serial = 0;
@@ -381,6 +382,11 @@ static int cover_worker(SceSize args, void *argp) {
     sceIoRemove(sfo_path);
     sceIoRemove(icon_path);
 
+    /*
+     * Publish the finished metadata + pixels only after every field has been
+     * written.  UI consumes cover_result_ready on the next frame.
+     */
+    cover_result_ready = 1;
     cover_worker_done = 1;
     cover_worker_busy = 0;
     return 0;
@@ -400,6 +406,7 @@ static void start_cover_worker(void) {
 
     cover_worker_serial = cover_request_serial;
     cover_worker_done = 0;
+    cover_result_ready = 0;
     cover_worker_result = 0;
     cover_worker_has_icon = 0;
     cover_worker_busy = 1;
@@ -450,6 +457,20 @@ static void schedule_preview_load(void) {
     }
 }
 
+
+static int current_preview_loading(void) {
+    if (preview_load_pending)
+        return 1;
+
+    if (cover_worker_busy &&
+        file_count > 0 &&
+        selected >= 0 && selected < file_count &&
+        !strcmp(files[selected].path, cover_worker_selected_path))
+        return 1;
+
+    return 0;
+}
+
 static void service_preview_load(void) {
     /* Reap finished worker. */
     if (!cover_worker_busy && cover_thread_uid >= 0) {
@@ -458,13 +479,18 @@ static void service_preview_load(void) {
         cover_thread_uid = -1;
     }
 
-    /* Apply only if this result still belongs to the current selection. */
-    if (cover_worker_done) {
+    /* Commit a complete worker result to the UI in one place. */
+    if (cover_result_ready) {
+        cover_result_ready = 0;
         cover_worker_done = 0;
 
-        if (file_count > 0 &&
+        int still_selected =
+            file_count > 0 &&
             selected >= 0 && selected < file_count &&
-            !strcmp(files[selected].path, cover_worker_selected_path)) {
+            !strcmp(files[selected].path, cover_worker_selected_path);
+
+        if (still_selected) {
+            /* Metadata becomes visible immediately in this same frame. */
             meta = cover_worker_meta;
 
             if (cover_worker_has_icon) {
@@ -472,6 +498,11 @@ static void service_preview_load(void) {
                     preview_icon = vita2d_create_empty_texture(128, 128);
 
                 if (preview_icon) {
+                    /*
+                     * The worker only touches CPU memory.  Synchronize the GPU
+                     * once, upload the final 128x128 cover, and immediately mark
+                     * it valid for the current draw frame.
+                     */
                     vita2d_wait_rendering_done();
 
                     unsigned char *dstp =
@@ -486,26 +517,42 @@ static void service_preview_load(void) {
                                    128u * 4u);
                         }
                         preview_icon_valid = 1;
+                    } else {
+                        preview_icon_valid = 0;
                     }
+                } else {
+                    preview_icon_valid = 0;
                 }
             } else {
                 preview_icon_valid = 0;
             }
+
+            /*
+             * The selected VPK is now fully committed.  Do not leave a stale
+             * pending request behind, otherwise the UI can remain on Laddar...
+             * or unnecessarily reload the same VPK.
+             */
+            preview_load_pending = 0;
+            preview_load_delay = 0;
         }
     }
 
     if (!preview_load_pending || install_busy || settings_open)
         return;
 
+    /* Never block the UI while an older selection is still decoding. */
+    if (cover_worker_busy)
+        return;
+
+    /*
+     * Once no worker is active, count down only the short idle debounce.
+     * If a stale worker just completed, this lets the current selection start
+     * immediately instead of adding another visible pause.
+     */
     if (preview_load_delay > 0) {
         preview_load_delay--;
         return;
     }
-
-    /* If an older cover is still decoding, keep scrolling responsive.
-       As soon as it finishes, this pending request starts automatically. */
-    if (cover_worker_busy)
-        return;
 
     preview_load_pending = 0;
     start_cover_worker();
@@ -905,7 +952,7 @@ int main(void) {
             vita2d_draw_texture_scale(preview_icon, 708, 105, sx, sy);
         } else {
             vita2d_draw_rectangle(708, 105, 128, 128, RGBA8(50,50,55,255));
-            if (cover_worker_busy || preview_load_pending)
+            if current_preview_loading()
                 draw_text(font, 724, 174, RGBA8(160,160,160,255), 0.65f, "Laddar...");
             else
                 draw_text(font, 731, 174, RGBA8(160,160,160,255), 0.65f, "Ingen ikon");
@@ -914,12 +961,12 @@ int main(void) {
         char info[180];
         snprintf(info,sizeof(info),"Title ID: %s",
                  meta.titleid[0] ? meta.titleid :
-                 ((cover_worker_busy || preview_load_pending) ? "Laddar..." : "-"));
+                 (current_preview_loading() ? "Laddar..." : "-"));
         draw_text(font,625,305,RGBA8(220,220,220,255),0.65f,info);
 
         snprintf(info,sizeof(info),"Version: %s",
                  meta.version[0] ? meta.version :
-                 ((cover_worker_busy || preview_load_pending) ? "Laddar..." : "-"));
+                 (current_preview_loading() ? "Laddar..." : "-"));
         draw_text(font,625,335,RGBA8(220,220,220,255),0.65f,info);
         if (file_count > 0) { snprintf(info,sizeof(info),"Fil: %.2f MB",(double)files[selected].size/(1024.0*1024.0)); draw_text(font,625,365,RGBA8(220,220,220,255),0.65f,info); }
 
