@@ -1,0 +1,16 @@
+VPK Manager PC - Windows Release
+================================
+
+The GitHub Actions workflow "Build Windows EXE" creates one standalone file:
+
+  VPK Manager PC.exe
+
+The release artifact contains ONLY the EXE. No start.bat, build_windows_exe.bat,
+Python console, or CMD window is required when launching the app.
+
+GitHub:
+Actions -> Build Windows EXE -> Run workflow -> download artifact
+"VPK-Manager-PC-Windows".
+
+The EXE includes the full PC GUI: saved Vita profiles, automatic Vita discovery,
+VPK transfer, Theme Change and Reset Default.
