@@ -192,6 +192,8 @@ typedef struct {
 
 static AppTheme theme;
 static vita2d_texture *theme_bg = NULL;
+static vita2d_texture *default_theme_bg = NULL;
+static vita2d_texture *custom_theme_bg = NULL;
 static int settings_open = 0;
 static int theme_choice = 0;
 
@@ -220,13 +222,29 @@ static void set_builtin_theme(int choice) {
     }
 }
 
+/*
+ * Keep the bundled MrWrack background alive for the whole process.
+ * Reset Default only switches the active pointer back to this texture.
+ * This avoids freeing/reloading a PNG texture while the GPU may still
+ * reference it, which can trigger a Vita GPU driver crash.
+ */
 static void free_theme_bg(void) {
-    if (theme_bg) { vita2d_free_texture(theme_bg); theme_bg = NULL; }
+    vita2d_wait_rendering_done();
+    theme_bg = NULL;
+    if (custom_theme_bg) {
+        vita2d_free_texture(custom_theme_bg);
+        custom_theme_bg = NULL;
+    }
+    if (default_theme_bg) {
+        vita2d_free_texture(default_theme_bg);
+        default_theme_bg = NULL;
+    }
 }
 
 static void load_app_background(void) {
-    free_theme_bg();
-    theme_bg = vita2d_load_PNG_file(APP_BG);
+    if (!default_theme_bg)
+        default_theme_bg = vita2d_load_PNG_file(APP_BG);
+    theme_bg = default_theme_bg;
 }
 
 static int load_custom_theme(void) {
@@ -248,15 +266,21 @@ static int load_custom_theme(void) {
         }
         fclose(f);
     }
-    free_theme_bg();
-    theme_bg = vita2d_load_PNG_file(THEME_BG);
+    /* Load a new custom image safely. The default texture is never freed. */
+    vita2d_wait_rendering_done();
+    if (custom_theme_bg) {
+        if (theme_bg == custom_theme_bg) theme_bg = default_theme_bg;
+        vita2d_free_texture(custom_theme_bg);
+        custom_theme_bg = NULL;
+    }
+    custom_theme_bg = vita2d_load_PNG_file(THEME_BG);
+    theme_bg = custom_theme_bg;
     theme_choice = 3;
     snprintf(status_line,sizeof(status_line),"Custom theme laddat.");
     return 0;
 }
 
 static void apply_theme_choice(int choice) {
-    free_theme_bg();
     if (choice == 3) {
         load_custom_theme();
         if (theme_bg) set_custom_theme_active(1);

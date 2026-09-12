@@ -1,0 +1,17 @@
+Theme Reset GPU Crash Fix
+=========================
+
+Fixar GPU crash nar Reset Default anvands fran PC-appen.
+
+Orsak:
+- Theme-bakgrunden frigjordes och laddades om direkt under korning.
+- PNG-texturen kunde fortfarande refereras av GPU:n nar vita2d_free_texture() anropades.
+
+Fix:
+- Den inbyggda MrWrack/GitHub-bakgrunden laddas en gang och behalls i minnet.
+- Reset Default byter bara aktiv texture-pointer tillbaka till default-bakgrunden.
+- Custom-bakgrunden ar separat fran default-bakgrunden.
+- vita2d_wait_rendering_done() anvands innan en gammal custom-textur frigors.
+- Bada texture-resurserna frigors sakert vid appens avslutning.
+
+VPK-installation, covers, metadata, scrolling och PC-portarna ar inte andrade.
