@@ -952,7 +952,7 @@ int main(void) {
             vita2d_draw_texture_scale(preview_icon, 708, 105, sx, sy);
         } else {
             vita2d_draw_rectangle(708, 105, 128, 128, RGBA8(50,50,55,255));
-            if current_preview_loading()
+            if (current_preview_loading())
                 draw_text(font, 724, 174, RGBA8(160,160,160,255), 0.65f, "Laddar...");
             else
                 draw_text(font, 731, 174, RGBA8(160,160,160,255), 0.65f, "Ingen ikon");

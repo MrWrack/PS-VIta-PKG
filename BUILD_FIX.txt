@@ -1,0 +1,11 @@
+BUILD FIX
+
+Fixed GitHub Actions compile error in src/main.c:
+
+Wrong:
+    if current_preview_loading()
+
+Correct:
+    if (current_preview_loading())
+
+No functional changes beyond this syntax correction.
