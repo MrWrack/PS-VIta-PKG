@@ -26,6 +26,8 @@
 #define THEME_DIR DATA_DIR "/theme"
 #define THEME_CFG THEME_DIR "/theme.ini"
 #define THEME_BG THEME_DIR "/background.png"
+#define THEME_ACTIVE THEME_DIR "/active.flag"
+#define THEME_RESET THEME_DIR "/reset.default"
 #define APP_BG "app0:app_background.png"
 #define MAX_FILES 256
 #define NAME_LEN 256
@@ -96,7 +98,26 @@ static char pc_recv_saved[512] = {0};
 static volatile int theme_recv_busy = 0;
 static volatile int theme_recv_done = 0;
 static volatile int theme_recv_result = 0;
+static volatile int theme_recv_reset = 0;
 static SceUID theme_recv_thread_uid = -1;
+
+static int path_exists(const char *path) {
+    SceIoStat st;
+    return sceIoGetstat(path, &st) >= 0;
+}
+
+static void set_custom_theme_active(int active) {
+    if (active) {
+        FILE *f = fopen(THEME_ACTIVE, "wb");
+        if (f) { fputs("1\n", f); fclose(f); }
+    } else {
+        sceIoRemove(THEME_ACTIVE);
+    }
+}
+
+static int custom_theme_is_active(void) {
+    return path_exists(THEME_ACTIVE) && path_exists(THEME_BG);
+}
 
 /* Forward declaration: used by the theme receiver before its definition. */
 static void rm_tree(const char *path);
@@ -109,6 +130,16 @@ static int theme_receive_worker(SceSize args, void *argp) {
         sceIoMkdir(THEME_DIR, 0777);
         theme_recv_result = zip_extract_all(THEME_ZIP, THEME_DIR);
         sceIoRemove(THEME_ZIP);
+        if (theme_recv_result >= 0) {
+            if (path_exists(THEME_RESET)) {
+                theme_recv_reset = 1;
+                rm_tree(THEME_DIR);
+                sceIoMkdir(THEME_DIR, 0777);
+            } else if (path_exists(THEME_BG)) {
+                theme_recv_reset = 0;
+                set_custom_theme_active(1);
+            }
+        }
     }
     theme_recv_busy = 0;
     theme_recv_done = 1;
@@ -117,7 +148,7 @@ static int theme_receive_worker(SceSize args, void *argp) {
 
 static int start_theme_receiver(void) {
     if (theme_recv_busy || theme_recv_thread_uid >= 0) return 0;
-    theme_recv_done = 0; theme_recv_result = 0;
+    theme_recv_done = 0; theme_recv_result = 0; theme_recv_reset = 0;
     theme_recv_thread_uid = sceKernelCreateThread(
         "VPKM_THEME_RECV", theme_receive_worker, 0x10000100, 0x20000, 0, 0, NULL);
     if (theme_recv_thread_uid < 0) return theme_recv_thread_uid;
@@ -228,8 +259,15 @@ static void apply_theme_choice(int choice) {
     free_theme_bg();
     if (choice == 3) {
         load_custom_theme();
-        if (!theme_bg) load_app_background();
+        if (theme_bg) set_custom_theme_active(1);
+        else {
+            set_custom_theme_active(0);
+            set_builtin_theme(0);
+            load_app_background();
+        }
     } else {
+        /* Any built-in choice uses the permanent bundled MrWrack background. */
+        set_custom_theme_active(0);
         set_builtin_theme(choice);
         load_app_background();
     }
@@ -909,6 +947,17 @@ static int pc_receive_theme(void) {
     r = zip_extract_all(THEME_ZIP, THEME_DIR);
     sceIoRemove(THEME_ZIP);
     if (r < 0) { snprintf(status_line,sizeof(status_line),"Kunde inte packa upp tema: %d",r); return r; }
+    if (path_exists(THEME_RESET)) {
+        rm_tree(THEME_DIR);
+        sceIoMkdir(THEME_DIR, 0777);
+        set_custom_theme_active(0);
+        set_builtin_theme(0);
+        load_app_background();
+        vita2d_set_clear_color(theme.bg);
+        snprintf(status_line,sizeof(status_line),"Default MrWrack theme aterstalld.");
+        return 0;
+    }
+    set_custom_theme_active(1);
     load_custom_theme();
     vita2d_set_clear_color(theme.bg);
     snprintf(status_line,sizeof(status_line),"Custom theme installerat fran PC.");
@@ -922,11 +971,16 @@ static void draw_text(vita2d_pgf *font, int x, int y, unsigned int color, float 
 int main(void) {
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     vita2d_init();
-    set_builtin_theme(0);
-    vita2d_set_clear_color(theme.bg);
-    load_app_background();
-    vita2d_pgf *font = vita2d_load_default_pgf();
     ensure_dirs();
+    set_builtin_theme(0);
+    if (custom_theme_is_active()) {
+        load_custom_theme();
+        if (!theme_bg) { set_custom_theme_active(0); load_app_background(); }
+    } else {
+        load_app_background();
+    }
+    vita2d_set_clear_color(theme.bg);
+    vita2d_pgf *font = vita2d_load_default_pgf();
     /* Network is initialized for PC Quick Install. Promoter modules are still deferred until install. */
     int net_res = net_receiver_init(vita_ip, sizeof(vita_ip));
     if (net_res < 0)
@@ -1047,10 +1101,17 @@ int main(void) {
             }
             if (theme_recv_result < 0) {
                 snprintf(status_line, sizeof(status_line), "Tema-overforing fel: 0x%08X", theme_recv_result);
+            } else if (theme_recv_reset) {
+                set_custom_theme_active(0);
+                set_builtin_theme(0);
+                load_app_background();
+                vita2d_set_clear_color(theme.bg);
+                snprintf(status_line, sizeof(status_line), "Default MrWrack theme aterstalld.");
             } else {
+                set_custom_theme_active(1);
                 load_custom_theme();
                 vita2d_set_clear_color(theme.bg);
-                snprintf(status_line, sizeof(status_line), "Custom theme installerat fran PC.");
+                snprintf(status_line, sizeof(status_line), "Custom theme sparat permanent.");
             }
         }
         if (net_res >= 0 && !theme_recv_busy && !theme_recv_done && theme_recv_thread_uid < 0)

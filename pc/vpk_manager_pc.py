@@ -3,7 +3,6 @@ import json, os, socket, struct, threading, tkinter as tk, zipfile, tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
-from PIL import Image, ImageTk
 
 VPK_MAGIC=0x56504B31; THEME_MAGIC=0x54484D31
 DEFAULT_VPK_PORT=1338; DEFAULT_THEME_PORT=1339; EXAMPLE_IP='192.102.1.175'
@@ -27,7 +26,7 @@ class App(tk.Tk):
   vf=ttk.LabelFrame(root,text='VPK',padding=10);vf.pack(fill='x',pady=(12,8));r=ttk.Frame(vf);r.pack(fill='x');self.file_label=ttk.Label(r,text='Ingen VPK vald');self.file_label.pack(side='left',fill='x',expand=True);ttk.Button(r,text='Välj VPK...',command=self._pick_vpk).pack(side='right');ttk.Button(vf,text='Send VPK',command=self._send_vpk).pack(anchor='e',pady=(7,0))
   tf=ttk.LabelFrame(root,text='Theme Change',padding=10);tf.pack(fill='both',expand=True,pady=6);r=ttk.Frame(tf);r.pack(fill='x');self.theme_label=ttk.Label(r,text='Ingen bakgrund vald');self.theme_label.pack(side='left',fill='x',expand=True);ttk.Button(r,text='Välj bakgrund...',command=self._pick_theme).pack(side='right')
   self.preview=tk.Label(tf,text='Preview 960 × 544',height=10);self.preview.pack(fill='both',expand=True,pady=8)
-  r=ttk.Frame(tf);r.pack(fill='x');ttk.Button(r,text='Reset Default',command=self._reset_info).pack(side='left');ttk.Button(r,text='Send Theme',command=self._send_theme).pack(side='right')
+  r=ttk.Frame(tf);r.pack(fill='x');ttk.Button(r,text='Reset Default',command=self._send_reset_default).pack(side='left');ttk.Button(r,text='Send Theme',command=self._send_theme).pack(side='right')
   self.progress=ttk.Progressbar(root,maximum=100);self.progress.pack(fill='x',pady=(8,4));self.status=tk.StringVar(value='Redo');ttk.Label(root,textvariable=self.status).pack(anchor='w')
  def _load_profiles(self):
   try:d=json.loads(PROFILE_FILE.read_text(encoding='utf8'));self.profiles=d.get('profiles',[]);self.default_index=d.get('default',-1)
@@ -100,12 +99,17 @@ class App(tk.Tk):
   p=filedialog.askopenfilename(filetypes=[('PS Vita VPK','*.vpk')]);
   if p:self.vpk_path=p;self.file_label.config(text=os.path.basename(p))
  def _pick_theme(self):
-  p=filedialog.askopenfilename(filetypes=[('Bilder','*.png *.jpg *.jpeg')]);
+  p=filedialog.askopenfilename(filetypes=[('Bilder','*.png *.jpg *.jpeg'),('PNG','*.png'),('JPEG','*.jpg *.jpeg')]);
   if not p:return
   self.theme_path=p;self.theme_label.config(text=os.path.basename(p))
   try:
-   im=Image.open(p).convert('RGB');im.thumbnail((430,245));self.preview_ref=ImageTk.PhotoImage(im);self.preview.config(image=self.preview_ref,text='')
-  except Exception as e:messagebox.showerror('Theme',str(e))
+   preview_path=self._theme_as_png(p)
+   im=tk.PhotoImage(file=preview_path)
+   # Preview uses a temporary PNG when JPG/JPEG was selected.
+   sx=max(1,(im.width()+429)//430); sy=max(1,(im.height()+244)//245); scale=max(sx,sy)
+   if scale>1: im=im.subsample(scale,scale)
+   self.preview_ref=im;self.preview.config(image=self.preview_ref,text='')
+  except Exception as e:messagebox.showerror('Theme','Kunde inte lasa PNG-bilden: '+str(e))
  def _send_file(self,path,magic,port,label,done):
   self.progress['value']=0
   def w():
@@ -130,8 +134,22 @@ class App(tk.Tk):
    except:pass
    self.sock=None;self.connect_btn.config(text='Connect')
   self._send_file(self.vpk_path,VPK_MAGIC,self.vpk_port.get(),'Skickar VPK','Klar! VPK mottagen av PS Vita.')
+ def _theme_as_png(self,path):
+  if os.path.splitext(path)[1].lower()=='.png': return path
+  td=tempfile.mkdtemp(prefix='vpkm_jpg_'); out=os.path.join(td,'background.png')
+  # Windows includes System.Drawing; use it to convert JPG/JPEG without Pillow/Python image packages.
+  ps="Add-Type -AssemblyName System.Drawing; $i=[System.Drawing.Image]::FromFile($args[0]); try { $i.Save($args[1],[System.Drawing.Imaging.ImageFormat]::Png) } finally { $i.Dispose() }"
+  import subprocess
+  flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
+  r=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',ps,path,out],capture_output=True,text=True,creationflags=flags)
+  if r.returncode!=0 or not os.path.isfile(out): raise RuntimeError('Kunde inte konvertera JPG/JPEG till PNG: '+(r.stderr.strip() or 'okänt fel'))
+  return out
  def _theme_zip(self):
-  td=tempfile.mkdtemp(prefix='vpkm_theme_');out=os.path.join(td,'theme.zip');im=Image.open(self.theme_path).convert('RGBA').resize((960,544),Image.Resampling.LANCZOS);bg=os.path.join(td,'background.png');im.save(bg,'PNG');ini=os.path.join(td,'theme.ini');open(ini,'w',encoding='utf8').write('name=PC Custom Theme\nbg=#08100B\npanel=#122619\naccent=#50FF8C\ntext=#F5F5F5\nselected=#285037\n');
+  td=tempfile.mkdtemp(prefix='vpkm_theme_');out=os.path.join(td,'theme.zip');bg=os.path.join(td,'background.png')
+  # PNG skickas direkt; JPG/JPEG konverteras automatiskt till PNG utan Pillow.
+  source=self._theme_as_png(self.theme_path)
+  with open(source,'rb') as src, open(bg,'wb') as dst: dst.write(src.read())
+  ini=os.path.join(td,'theme.ini');open(ini,'w',encoding='utf8').write('name=PC Custom Theme\nbg=#08100B\npanel=#122619\naccent=#50FF8C\ntext=#F5F5F5\nselected=#285037\n')
   with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:z.write(bg,'background.png');z.write(ini,'theme.ini')
   return out
  def _send_theme(self):
@@ -139,5 +157,9 @@ class App(tk.Tk):
   try:z=self._theme_zip()
   except Exception as e:return messagebox.showerror('Theme',str(e))
   self._send_file(z,THEME_MAGIC,self.theme_port.get(),'Skickar Theme','Klar! Theme mottaget och aktiverat på PS Vita.')
- def _reset_info(self):messagebox.showinfo('Reset Default','På PS Vita: START → välj Green/Default. Den inbyggda MrWrack-bakgrunden finns alltid kvar och skrivs inte över.')
+ def _send_reset_default(self):
+  td=tempfile.mkdtemp(prefix='vpkm_reset_');out=os.path.join(td,'theme_reset.zip');marker=os.path.join(td,'reset.default')
+  open(marker,'w',encoding='ascii').write('reset\n')
+  with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:z.write(marker,'reset.default')
+  self._send_file(out,THEME_MAGIC,self.theme_port.get(),'Reset Default','Klar! MrWrack Default återställd på PS Vita.')
 if __name__=='__main__':App().mainloop()

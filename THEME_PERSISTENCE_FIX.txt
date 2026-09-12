@@ -1,0 +1,8 @@
+THEME PERSISTENCE FIX
+
+- Custom Theme sparas i ux0:/data/vpk_manager/theme/background.png.
+- active.flag skapas när custom theme är aktivt.
+- Vid appstart laddas custom theme automatiskt om active.flag + background.png finns.
+- Reset Default från PC skickar reset.default via Theme-port 1339.
+- Reset Default tar bort custom theme-filerna och återgår till den inbyggda MrWrack/GitHub-bakgrunden (app0:app_background.png).
+- Inbyggd default-bakgrund skrivs aldrig över.

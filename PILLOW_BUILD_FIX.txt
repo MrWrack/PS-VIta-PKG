@@ -1,0 +1,9 @@
+VPK Manager PC Theme v4 - Windows build fix
+
+- Removed Pillow dependency from the PC app.
+- Theme picker now accepts PNG files.
+- PNG preview uses built-in Tkinter PhotoImage.
+- The original PNG is sent unchanged; PS Vita scales the background to 960x544 while rendering.
+- build_windows_exe.bat now installs only PyInstaller.
+
+This avoids Pillow wheel/build failures on Python 3.13 Windows systems.
