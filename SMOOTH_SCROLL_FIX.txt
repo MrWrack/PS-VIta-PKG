@@ -1,0 +1,10 @@
+SMOOTH SCROLL FIX
+
+- Installation code is unchanged.
+- LiveArea/bubble icon is unchanged.
+- Only in-app VPK list/cover browsing is changed.
+- D-pad selection moves immediately.
+- Cover loading is delayed a few frames and restarted if you keep scrolling,
+  so heavy PNG/ZIP work does not run on every Up/Down step.
+- Holding Up/Down now repeats smoothly.
+- The persistent GPU cover texture from the previous stable fix is retained.

@@ -48,6 +48,9 @@ typedef struct {
 
 static VpkEntry files[MAX_FILES];
 static int file_count = 0;
+static int preview_load_pending = 0;
+static int preview_load_delay = 0;
+
 static int selected = 0;
 static int scroll = 0;
 static VpkMeta meta;
@@ -390,6 +393,30 @@ static void load_preview(void) {
     }
 }
 
+
+static void schedule_preview_load(void) {
+    /*
+     * Do not decode/extract a cover in the same frame as D-pad movement.
+     * This lets the list move immediately and waits a few frames until the
+     * user has stopped scrolling before doing the heavier cover work.
+     */
+    preview_load_pending = 1;
+    preview_load_delay = 5;
+}
+
+static void service_preview_load(void) {
+    if (!preview_load_pending || install_busy || settings_open)
+        return;
+
+    if (preview_load_delay > 0) {
+        preview_load_delay--;
+        return;
+    }
+
+    preview_load_pending = 0;
+    load_preview();
+}
+
 static void refresh_vpk_list(void) {
     int old_selected = selected;
 
@@ -670,29 +697,58 @@ int main(void) {
 
     SceCtrlData pad, oldpad;
     memset(&pad, 0, sizeof(pad)); memset(&oldpad, 0, sizeof(oldpad));
+    int nav_repeat_delay = 0;
+
 
     while (1) {
         sceCtrlPeekBufferPositive(0, &pad, 1);
         unsigned int pressed = pad.buttons & ~oldpad.buttons;
         int changed = 0;
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_UP)) {
-            if (selected > 0) { selected--; changed = 1; }
+
+        int up_held = (pad.buttons & SCE_CTRL_UP) != 0;
+        int down_held = (pad.buttons & SCE_CTRL_DOWN) != 0;
+        int nav_step = 0;
+
+        if (!settings_open && !install_busy) {
+            if (pressed & SCE_CTRL_UP) {
+                nav_step = -1;
+                nav_repeat_delay = 12;
+            } else if (pressed & SCE_CTRL_DOWN) {
+                nav_step = 1;
+                nav_repeat_delay = 12;
+            } else if (up_held || down_held) {
+                if (nav_repeat_delay > 0) {
+                    nav_repeat_delay--;
+                } else {
+                    nav_step = up_held ? -1 : 1;
+                    nav_repeat_delay = 3;
+                }
+            } else {
+                nav_repeat_delay = 0;
+            }
+
+            if (nav_step < 0 && selected > 0) {
+                selected--;
+                changed = 1;
+            } else if (nav_step > 0 && selected + 1 < file_count) {
+                selected++;
+                changed = 1;
+            }
+
             if (selected < scroll) scroll = selected;
-        }
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_DOWN)) {
-            if (selected + 1 < file_count) { selected++; changed = 1; }
             if (selected >= scroll + 8) scroll = selected - 7;
         }
-        if (changed) load_preview();
+        if (changed) schedule_preview_load();
         if (!settings_open && !install_busy && (pressed & SCE_CTRL_CROSS)) {
+            preview_load_pending = 0;
             start_install_selected();
         }
         if (!settings_open && !install_busy && (pressed & SCE_CTRL_RTRIGGER))
             snprintf(status_line, sizeof(status_line), "PC-VPK fortfarande avstangt for stabilitet.");
         if (!settings_open && !install_busy && (pressed & SCE_CTRL_LTRIGGER))
             snprintf(status_line, sizeof(status_line), "PC-Tema fortfarande avstangt for stabilitet.");
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_TRIANGLE)) delete_selected();
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_SQUARE)) refresh_vpk_list();
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_TRIANGLE)) { preview_load_pending = 0; delete_selected(); }
+        if (!settings_open && !install_busy && (pressed & SCE_CTRL_SQUARE)) { preview_load_pending = 0; refresh_vpk_list(); }
         if (!install_busy && (pressed & SCE_CTRL_START)) settings_open = !settings_open;
         if (settings_open) {
             if (pressed & SCE_CTRL_UP) { theme_choice--; if (theme_choice < 0) theme_choice = 3; }
@@ -707,6 +763,8 @@ int main(void) {
             sceKernelDeleteThread(install_thread_uid);
             install_thread_uid = -1;
         }
+
+        service_preview_load();
 
         vita2d_start_drawing(); vita2d_clear_screen();
         if (theme_bg) {
