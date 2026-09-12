@@ -1125,7 +1125,7 @@ int main(void) {
 
 
     if (pc_recv_thread_uid >= 0) {
-        sceKernelTerminateDeleteThread(pc_recv_thread_uid);
+        sceKernelDeleteThread(pc_recv_thread_uid);
         pc_recv_thread_uid = -1;
         pc_recv_busy = 0;
     }
