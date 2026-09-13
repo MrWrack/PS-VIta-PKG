@@ -11,6 +11,12 @@ Homebrew VPK manager with PC Quick Install and direct Custom Theme transfer.
 - **START** – theme menu
 - **O** – back/exit
 
+## Felkoder och avbrutna överföringar
+- Det riktiga Vita-felet visas i UI:t som en dynamisk hexkod, till exempel `0x80101114`.
+- Felloggen sparas i `ux0:/data/vpk_manager/logs/error.log` och är inte hårdkodad till ett visst fel.
+- En avbruten PC-överföring behålls som `.vpk.part` och installeras aldrig som en färdig VPK.
+- I feldialogen: **X/O** stänger, **Square** försöker igen och **Triangle** visar loggens sökväg.
+
 ## Custom Theme format
 The theme directory can contain:
 - `background.png` (recommended 960x544)
@@ -46,7 +52,7 @@ make
 The generated output is `VPKManager.vpk`.
 
 ## GitHub Actions – get the actual VPK first
-This project now includes `.github/workflows/build.yml`.
+This project includes `.github/workflows/build-vpk.yml`.
 
 1. Upload the contents of this folder to a GitHub repository.
 2. Open **Actions** → **Build VPK Manager**.
@@ -55,3 +61,8 @@ This project now includes `.github/workflows/build.yml`.
 5. Inside it is the file you install on the PS Vita: **`VPKManager.vpk`**.
 
 The workflow uses the official/community VitaSDK Docker image and builds the same target configured by `CMakeLists.txt`.
+
+## GitHub Actions – Windows EXE
+Run **Build Windows EXE** to get the artifact **VPK-Manager-PC-Windows**. It contains one standalone
+`VPK Manager PC.exe` plus `SHA256.txt`. The executable is built without UPX and scanned with Microsoft
+Defender. Because it is unsigned and newly built, reputation-based antivirus warnings can still occur.

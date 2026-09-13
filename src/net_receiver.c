@@ -117,7 +117,9 @@ int net_receive_one_vpk(const char *dest_dir, int port, char *saved_path, int sa
     name[h.name_len] = '\0'; sanitize_filename(name);
 
     char path[512]; snprintf(path, sizeof(path), "%s/%s", dest_dir, name);
-    SceUID fd = sceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+    char partial_path[520]; snprintf(partial_path, sizeof(partial_path), "%s.part", path);
+    sceIoRemove(partial_path);
+    SceUID fd = sceIoOpen(partial_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
     if (fd < 0) { sceNetSocketClose(client); sceNetSocketClose(server); return fd; }
 
     unsigned char buf[32 * 1024];
@@ -139,7 +141,14 @@ int net_receive_one_vpk(const char *dest_dir, int port, char *saved_path, int sa
     sceNetSocketClose(client);
     sceNetSocketClose(server);
 
-    if (r < 0) { sceIoRemove(path); return r; }
+    if (r < 0) {
+        /* Keep the .part suffix so an interrupted transfer can never be
+           mistaken for an installable VPK. */
+        return r;
+    }
+    sceIoRemove(path);
+    r = sceIoRename(partial_path, path);
+    if (r < 0) return r;
     if (saved_path) snprintf(saved_path, saved_path_size, "%s", path);
     if (status) snprintf(status, status_size, "Mottagen: %s", name);
     return 0;

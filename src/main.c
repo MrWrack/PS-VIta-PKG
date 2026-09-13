@@ -5,6 +5,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/promoterutil.h>
+#include <psp2/rtc.h>
 #include <psp2/sysmodule.h>
 
 #include <vita2d.h>
@@ -34,6 +35,9 @@
 #define PC_INSTALL_PORT 1338
 #define PC_THEME_PORT 1339
 #define THEME_ZIP DATA_DIR "/theme_upload.zip"
+#define LOG_DIR DATA_DIR "/logs"
+#define ERROR_LOG LOG_DIR "/error.log"
+#define ERROR_DOWNLOAD_INCOMPLETE ((int)0x80F00101)
 
 typedef struct {
     char name[NAME_LEN];
@@ -85,6 +89,12 @@ static SceUID install_thread_uid = -1;
 static char install_path[512] = {0};
 static char install_name[NAME_LEN] = {0};
 static char install_title[128] = {0};
+static volatile int error_visible = 0;
+static int last_error_code = 0;
+static char last_error_type[64] = {0};
+static char last_error_stage[96] = {0};
+static char last_error_path[256] = {0};
+static char last_error_reason[192] = {0};
 
 /* PC Quick Install receiver. Runs in its own thread so the UI never blocks
    while waiting for the Windows app to connect. */
@@ -324,6 +334,29 @@ static void ensure_dirs(void) {
     sceIoMkdir("ux0:/data", 0777);
     sceIoMkdir(DATA_DIR, 0777);
     sceIoMkdir(THEME_DIR, 0777);
+    sceIoMkdir(LOG_DIR, 0777);
+}
+
+static void report_error(int code, const char *type, const char *stage,
+                         const char *path, const char *reason) {
+    SceDateTime now;
+    char line[768];
+    sceRtcGetCurrentClock(&now, 0);
+
+    last_error_code = code;
+    snprintf(last_error_type, sizeof(last_error_type), "%s", type ? type : "VITA_ERROR");
+    snprintf(last_error_stage, sizeof(last_error_stage), "%s", stage ? stage : "Okant steg");
+    snprintf(last_error_path, sizeof(last_error_path), "%s", path ? path : "-");
+    snprintf(last_error_reason, sizeof(last_error_reason), "%s", reason ? reason : "Okant fel");
+    error_visible = 1;
+
+    snprintf(line, sizeof(line),
+             "[%04d-%02d-%02d %02d:%02d:%02d] code=0x%08X type=%s stage=%s path=%s reason=%s\n",
+             now.year, now.month, now.day, now.hour, now.minute, now.second,
+             (unsigned int)code, last_error_type, last_error_stage,
+             last_error_path, last_error_reason);
+    FILE *f = fopen(ERROR_LOG, "ab");
+    if (f) { fwrite(line, 1, strlen(line), f); fclose(f); }
 }
 
 static void scan_vpks(void) {
@@ -854,7 +887,9 @@ static int install_worker(SceSize args, void *argp) {
     r = zip_extract_all_progress(install_path, INSTALL_DIR,
                                  install_extract_progress, NULL);
     if (r < 0) {
-        snprintf(status_line, sizeof(status_line), "Fel vid uppackning: %d", r);
+        snprintf(status_line, sizeof(status_line), "Fel vid uppackning: 0x%08X", r);
+        report_error(r, "VPK_EXTRACT_ERROR", "Packar upp VPK", install_path,
+                     "Paketet ar skadat, ofullstandigt eller har fel ZIP-format.");
         rm_tree(INSTALL_DIR);
         install_result = r;
         install_busy = 0;
@@ -867,6 +902,8 @@ static int install_worker(SceSize args, void *argp) {
     if (r < 0) {
         snprintf(status_line, sizeof(status_line),
                  "PNG-fix misslyckades: %d", r);
+        report_error(r, "VPK_PNG_ERROR", "Kontrollerar Vita PNG", install_path,
+                     "En bild i sce_sys har ett format som inte kunde korrigeras.");
         rm_tree(INSTALL_DIR);
         install_result = r;
         install_busy = 0;
@@ -880,6 +917,8 @@ static int install_worker(SceSize args, void *argp) {
     if (r < 0) {
         snprintf(status_line, sizeof(status_line),
                  "Kunde inte skapa head.bin: %d", r);
+        report_error(r, "VPK_METADATA_ERROR", "Skapar paketmetadata", install_path,
+                     "param.sfo, TITLE_ID eller paketmetadata ar ogiltig.");
         rm_tree(INSTALL_DIR);
         install_result = r;
         install_busy = 0;
@@ -899,6 +938,8 @@ static int install_worker(SceSize args, void *argp) {
     } else {
         snprintf(status_line, sizeof(status_line),
                  "Installationen misslyckades: 0x%08X", r);
+        report_error(r, "VITA_PROMOTE_ERROR", "Installerar paket", install_path,
+                     "PS Vita avvisade paketet. Se felkoden och kontrollera paketstrukturen.");
     }
 
     rm_tree(INSTALL_DIR);
@@ -928,6 +969,8 @@ static int start_install_selected(void) {
         install_busy = 0;
         snprintf(status_line, sizeof(status_line),
                  "Kunde inte starta installationstrad: 0x%08X", r);
+        report_error(r, "INSTALL_THREAD_ERROR", "Startar installation",
+                     install_path, "PS Vita kunde inte skapa installationstraden.");
         return r;
     }
 
@@ -938,6 +981,8 @@ static int start_install_selected(void) {
         install_busy = 0;
         snprintf(status_line, sizeof(status_line),
                  "Kunde inte starta installation: 0x%08X", r);
+        report_error(r, "INSTALL_START_ERROR", "Startar installation",
+                     install_path, "PS Vita kunde inte starta installationstraden.");
         return r;
     }
 
@@ -955,7 +1000,13 @@ static int select_path(const char *path) {
 static int pc_receive_and_install(void) {
     char saved[512] = {0};
     int r = net_receive_one_vpk(DOWNLOAD_DIR, PC_INSTALL_PORT, saved, sizeof(saved), status_line, sizeof(status_line));
-    if (r < 0) { snprintf(status_line, sizeof(status_line), "PC-overforing fel: 0x%08X", r); return r; }
+    if (r < 0) {
+        int code = r ? r : ERROR_DOWNLOAD_INCOMPLETE;
+        snprintf(status_line, sizeof(status_line), "PC-overforing fel: 0x%08X", code);
+        report_error(code, "DOWNLOAD_INCOMPLETE", "Tar emot VPK fran PC",
+                     DOWNLOAD_DIR, "Overforingen stoppades. En .part-fil installeras aldrig.");
+        return code;
+    }
     scan_vpks();
     if (select_path(saved) < 0) load_preview();
     r = start_install_selected();
@@ -1033,7 +1084,7 @@ int main(void) {
         int down_held = (pad.buttons & SCE_CTRL_DOWN) != 0;
         int nav_step = 0;
 
-        if (!settings_open && !install_busy) {
+        if (!settings_open && !install_busy && !error_visible) {
             if (pressed & SCE_CTRL_UP) {
                 nav_step = -1;
                 nav_repeat_delay = 8;
@@ -1080,11 +1131,11 @@ int main(void) {
             if (selected >= scroll + 8) scroll = selected - 7;
         }
         if (changed) schedule_preview_load();
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_CROSS)) {
+        if (!settings_open && !install_busy && !error_visible && (pressed & SCE_CTRL_CROSS)) {
             preview_load_pending = 0;
             start_install_selected();
         }
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_RTRIGGER)) {
+        if (!settings_open && !install_busy && !error_visible && (pressed & SCE_CTRL_RTRIGGER)) {
             if (net_res < 0) snprintf(status_line, sizeof(status_line), "PC-natverk ej tillgangligt: 0x%08X", net_res);
             else if (!pc_recv_busy && pc_recv_thread_uid < 0) start_pc_receiver();
             else snprintf(status_line, sizeof(status_line), "PC Quick Install: %s:%d - vantar pa PC", vita_ip, PC_INSTALL_PORT);
@@ -1100,7 +1151,11 @@ int main(void) {
                 pc_recv_thread_uid = -1;
             }
             if (pc_recv_result < 0) {
-                snprintf(status_line, sizeof(status_line), "PC-overforing fel: 0x%08X", pc_recv_result);
+                int code = pc_recv_result ? pc_recv_result : ERROR_DOWNLOAD_INCOMPLETE;
+                snprintf(status_line, sizeof(status_line), "PC-overforing fel: 0x%08X", code);
+                report_error(code, "DOWNLOAD_INCOMPLETE", "Tar emot VPK fran PC",
+                             DOWNLOAD_DIR,
+                             "Nedladdningen stoppades. Den ofullstandiga .part-filen installeras inte.");
             } else {
                 scan_vpks();
                 if (select_path(pc_recv_saved) < 0) load_preview();
@@ -1112,7 +1167,7 @@ int main(void) {
         if (net_res >= 0 && !install_busy && !pc_recv_busy && !pc_recv_done && pc_recv_thread_uid < 0) {
             start_pc_receiver();
         }
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_LTRIGGER)) {
+        if (!settings_open && !install_busy && !error_visible && (pressed & SCE_CTRL_LTRIGGER)) {
             if (!theme_recv_busy && theme_recv_thread_uid < 0) start_theme_receiver();
             snprintf(status_line, sizeof(status_line), "PC Theme: %s:%d - vantar pa PC", vita_ip, PC_THEME_PORT);
         }
@@ -1141,15 +1196,33 @@ int main(void) {
         if (net_res >= 0 && !theme_recv_busy && !theme_recv_done && theme_recv_thread_uid < 0)
             start_theme_receiver();
 
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_TRIANGLE)) { preview_load_pending = 0; delete_selected(); }
-        if (!settings_open && !install_busy && (pressed & SCE_CTRL_SQUARE)) { preview_load_pending = 0; refresh_vpk_list(); }
-        if (!install_busy && (pressed & SCE_CTRL_START)) settings_open = !settings_open;
+        if (error_visible && !install_busy) {
+            if (pressed & (SCE_CTRL_CROSS | SCE_CTRL_CIRCLE)) {
+                error_visible = 0;
+            } else if (pressed & SCE_CTRL_SQUARE) {
+                error_visible = 0;
+                if (!strcmp(last_error_type, "DOWNLOAD_INCOMPLETE")) {
+                    if (!pc_recv_busy && pc_recv_thread_uid < 0)
+                        start_pc_receiver();
+                    snprintf(status_line, sizeof(status_line),
+                             "Forsoker igen: vantar pa PC pa %s:%d", vita_ip, PC_INSTALL_PORT);
+                } else {
+                    start_install_selected();
+                }
+            } else if (pressed & SCE_CTRL_TRIANGLE) {
+                snprintf(status_line, sizeof(status_line), "Fellogg: %s", ERROR_LOG);
+            }
+        }
+
+        if (!settings_open && !install_busy && !error_visible && (pressed & SCE_CTRL_TRIANGLE)) { preview_load_pending = 0; delete_selected(); }
+        if (!settings_open && !install_busy && !error_visible && (pressed & SCE_CTRL_SQUARE)) { preview_load_pending = 0; refresh_vpk_list(); }
+        if (!install_busy && !error_visible && (pressed & SCE_CTRL_START)) settings_open = !settings_open;
         if (settings_open) {
             if (pressed & SCE_CTRL_UP) { theme_choice--; if (theme_choice < 0) theme_choice = 3; }
             if (pressed & SCE_CTRL_DOWN) { theme_choice++; if (theme_choice > 3) theme_choice = 0; }
             if (pressed & SCE_CTRL_CROSS) { apply_theme_choice(theme_choice); settings_open = 0; }
             if (pressed & SCE_CTRL_CIRCLE) settings_open = 0;
-        } else if (!install_busy && (pressed & SCE_CTRL_CIRCLE)) break;
+        } else if (!install_busy && !error_visible && (pressed & SCE_CTRL_CIRCLE)) break;
 
         /* Reap the worker after it has finished. */
         if (!install_busy && install_thread_uid >= 0) {
@@ -1237,6 +1310,29 @@ int main(void) {
             draw_text(font, 185, 315, RGBA8(220,220,220,255), 0.67f, status_line);
             draw_text(font, 185, 340, RGBA8(150,150,155,255), 0.56f,
                       "Vanta tills installationen ar klar. Menyn fortsatter att uppdateras.");
+        }
+
+        if (error_visible && !install_busy) {
+            vita2d_draw_rectangle(115, 120, 730, 330, RGBA8(5,5,8,244));
+            vita2d_draw_rectangle(115, 120, 730, 4, RGBA8(255,90,60,255));
+            draw_text(font, 150, 165, RGBA8(255,100,70,255), 1.0f,
+                      !strcmp(last_error_type, "DOWNLOAD_INCOMPLETE")
+                          ? "Nedladdningen stoppades"
+                          : "Paketet kunde inte installeras");
+
+            char errline[360];
+            snprintf(errline, sizeof(errline), "Felkod: 0x%08X", (unsigned int)last_error_code);
+            draw_text(font, 150, 205, theme.text, 0.72f, errline);
+            snprintf(errline, sizeof(errline), "Feltyp: %s", last_error_type);
+            draw_text(font, 150, 235, theme.text, 0.67f, errline);
+            snprintf(errline, sizeof(errline), "Steg: %s", last_error_stage);
+            draw_text(font, 150, 265, theme.text, 0.63f, errline);
+            snprintf(errline, sizeof(errline), "Orsak: %s", last_error_reason);
+            draw_text(font, 150, 300, RGBA8(225,225,225,255), 0.58f, errline);
+            snprintf(errline, sizeof(errline), "Logg: %s", ERROR_LOG);
+            draw_text(font, 150, 340, RGBA8(150,220,255,255), 0.58f, errline);
+            draw_text(font, 150, 408, theme.accent, 0.62f,
+                      "X Stang   Square Forsok igen   Triangle Visa logg   O Tillbaka");
         }
 
         draw_text(font, 28, 535, RGBA8(255,195,90,255), 0.64f, status_line);
